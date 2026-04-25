@@ -1,6 +1,6 @@
 ---
 name: interactive-qa
-description: Interactive QA session where user reports bugs conversationally. For each bug, immediately spawns one explore+fix agent in background (parallel, no batching). Every fix must follow strict TDD RED-GREEN-REFACTOR — TDD_SKIPPED is a hard fail with no exceptions. When a bug is fixed, notifies the user to manually test in the worktree. User approves (merges into base branch) or requests a re-fix on the same branch. Failed bugs get GitHub issues. Use when user wants bugs fixed on the spot during QA, mentions "interactive-qa", or wants TDD auto-fix during QA.
+description: Interactive QA session where user reports bugs conversationally. For each bug, immediately spawns one explore+fix agent in background (parallel, no batching). Every fix must follow strict TDD RED-GREEN-REFACTOR — TDD_SKIPPED is a hard fail with no exceptions. When a bug is fixed, prompts user interactively (root cause + fix summary) to merge or re-fix. After merge, branch is kept for manual testing; user confirms fix or requests re-fix before branch is removed. Failed bugs get GitHub issues. Use when user wants bugs fixed on the spot during QA, mentions "interactive-qa", or wants TDD auto-fix during QA.
 model: opus
 argument-hint: "(--prd <issue-number>) (--pr)"
 ---
@@ -80,6 +80,8 @@ failureReason: null | string
 branch:        null | string  (e.g. "fix-off-by-one-split")
 worktreePath:  null | string  (e.g. "/path/to/repo/../fix-off-by-one-split")
 testFilePath:  null | string  (set when agent reports test file used)
+rootCause:     null | string  (one sentence parsed from agent SUCCESS line)
+fixSummary:    null | string  (one sentence parsed from agent SUCCESS line)
 ```
 
 ---
@@ -154,11 +156,9 @@ If the user does NOT speak and no notification arrives within ~30 minutes of "do
 
 ### Step 2 — Continue accepting user input
 
-After "done":
-- `approve #<id>` (status `pending-review`) → run Phase C approve flow.
-- Free-form description targeting a `pending-review` `#<id>` → re-fix flow (see Phase C).
+After "done", approval is driven by `AskUserQuestion` in §coordinator — no need to type "approve". Still accept:
+- Free-form description targeting a `pending-review` `#<id>` → re-fix flow (fallback if AskUserQuestion is not yet visible).
 - New bug description (no `#<id>` reference) → reject: *"Session is closing — new bugs after 'done' are not accepted. Start a new QA session."*
-- `approve #<id>` for a non-existent or non-`pending-review` id → reject with current status.
 
 Session ends only once every bug is `approved` or `failed`. Then run Phase D.
 
@@ -181,13 +181,18 @@ If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`.
 
 ### Parse agent result
 
-- `SUCCESS: <hash> TEST:<testFilePath>` (marker confirmed) → `status=pending-review`, store commitHash and testFilePath. Notify user:
-  ```
-  #<id> <title> — ready to test.
-  Worktree: <worktreePath>
-  Branch:   <branch>
-  Start your server there and test. Say "approve #<id>" when satisfied, or describe what's still wrong to re-fix.
-  ```
+- `SUCCESS: <hash> TEST:<testFilePath> ROOT_CAUSE:<rootCause> FIX_SUMMARY:<fixSummary>` (marker confirmed):
+  - Set `status=pending-review`, store `commitHash`, `testFilePath`, `rootCause`, `fixSummary`
+  - Call `AskUserQuestion`:
+    ```
+    question: "#<id> `<title>` ready.\n\nRoot cause: <rootCause>\nFix: <fixSummary>\n\nMerge into `<BASE_BRANCH>`?"
+    header:   "Merge #<id>"
+    options:
+      - label: "Merge"   description: "Rebase + fast-forward merge (branch kept until you confirm)"
+      - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
+    ```
+  - If "Merge" → run **§merge-flow**
+  - If "Re-fix" / Other (user typed feedback) → run **re-fix flow** (see Phase C)
 - `FAILED: <reason>` → `status=failed`, failureReason=reason
 - `TDD_SKIPPED: <reason>` → `status=failed`, failureReason=`TDD skipped: <reason>` **(hard fail, never retry)**
 
@@ -266,7 +271,7 @@ Commit message rules:
 
 ── STEP 5: FINAL REPORT ─────────────────────
 Your LAST message must be EXACTLY one of these three forms:
-  SUCCESS: <full 40-character commit hash> TEST:<path/to/test/file>
+  SUCCESS: <full 40-character commit hash> TEST:<path/to/test/file> ROOT_CAUSE:<one sentence naming the defective code> FIX_SUMMARY:<one sentence naming the change made>
   FAILED: <one-sentence reason>
   TDD_SKIPPED: <one-sentence reason>
 
@@ -275,11 +280,9 @@ Never push to remote.
 
 ---
 
-## Phase C — Review loop (per bug, ongoing)
+## §merge-flow — merge + post-merge confirmation
 
-This phase runs continuously alongside Phase B. Each `pending-review` bug waits for user input.
-
-### `approve #<id>`
+Called from §coordinator when user picks "Merge" on a `pending-review` bug.
 
 **Step 1 — Rebase onto `BASE_BRANCH`:**
 ```bash
@@ -288,19 +291,18 @@ if [ "$PR_MODE" = true ]; then
   git fetch origin "$BASE_BRANCH"
   REBASE_TARGET="origin/$BASE_BRANCH"
 else
-  REBASE_TARGET="$BASE_BRANCH"   # local-only branch
+  REBASE_TARGET="$BASE_BRANCH"
 fi
 git rebase "$REBASE_TARGET"
 ```
 
-**On any conflict:** abort, do NOT auto-resolve. Auto-resolution risks discarding base-branch changes silently.
-
+**On any conflict:** abort, do NOT auto-resolve.
 ```bash
 git rebase --abort
 ```
 → `status=failed`, `failureReason="Rebase conflict — manual resolution required"`.
 
-After a successful rebase, run `<TEST_CMD>`. Pass → continue. Fail → `status=failed`, `failureReason="Regression after rebase"`.
+After a successful rebase, run `<TEST_CMD>`. Fail → `status=failed`, `failureReason="Regression after rebase"`.
 
 ---
 
@@ -340,7 +342,6 @@ Test marker \`<MARKER_PREFIX>\` in \`<testFilePath>\`.
 EOF
 )")
 
-# Block until merged. --auto only queues — we must wait for the actual merge.
 gh pr merge --squash --auto "$PR_URL"
 until [ "$(gh pr view "$PR_URL" --json state -q .state)" = "MERGED" ]; do sleep 10; done
 
@@ -348,19 +349,38 @@ git -C "$REPO_ROOT" checkout "$BASE_BRANCH"
 git -C "$REPO_ROOT" pull --ff-only origin "$BASE_BRANCH"
 ```
 
-If merge stays `OPEN` past 30 min (failing CI, blocked review) → `status=failed`, `failureReason="PR did not auto-merge: $PR_URL"`.
+If merge stays `OPEN` past 30 min → `status=failed`, `failureReason="PR did not auto-merge: $PR_URL"`.
 
 ---
 
-**Step 3 — Remove worktree and prune branch ref:**
-```bash
-git -C "$REPO_ROOT" worktree remove <worktreePath> --force
-git -C "$REPO_ROOT" branch -D <branch> 2>/dev/null || true   # in PR mode the squash-merge leaves the local branch behind
+**Step 3 — Post-merge confirmation (branch/worktree NOT removed yet):**
+
+Call `AskUserQuestion`:
+```
+question: "#<id> `<title>` merged into `<BASE_BRANCH>`. Test manually at `<worktreePath>`. Fixed?"
+header:   "Confirm #<id>"
+options:
+  - label: "Confirmed fixed"  description: "Remove branch + worktree, mark approved"
+  - label: "Still broken"     description: "Describe what's wrong — re-fix on same branch, then merge again"
 ```
 
-**Step 4 —** Set `status=approved`. Print: `#<id> <title> — merged into <BASE_BRANCH> ✓`
+- If "Confirmed fixed":
+  ```bash
+  git -C "$REPO_ROOT" worktree remove <worktreePath> --force
+  git -C "$REPO_ROOT" branch -D <branch> 2>/dev/null || true
+  ```
+  Set `status=approved`. Print: `#<id> <title> — merged and confirmed ✓`
+
+- If "Still broken" / Other (user typed feedback):
+  - `status=fixing`
+  - Spawn new explore+fix agent (`run_in_background: true`) on the **same worktree/branch** using §agent-prompt with RE-FIX NOTE (see Phase C)
+  - When agent completes → back to §coordinator (same flow: AskUserQuestion merge? → §merge-flow → post-merge confirmation)
 
 ---
+
+## Phase C — Re-fix loop (per bug, ongoing)
+
+Handles cases where the user is not satisfied with a fix — either before or after merge. Runs continuously alongside Phase B.
 
 ### User describes remaining problem with `#<id>`
 
@@ -456,7 +476,7 @@ For each bug with `status: failed`:
 
 ### Cleanup worktrees
 
-Approved bugs already had their worktree removed in Phase C. Here we only clean up **failed** bugs (their worktrees were left in place for inspection until summary):
+Approved bugs already had their worktree removed in §merge-flow. Here we only clean up **failed** bugs (their worktrees were left in place for inspection until summary):
 
 ```bash
 # For each bug with status=failed:
