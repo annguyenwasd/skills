@@ -99,6 +99,7 @@ Claude-related plugins and references I rely on. Append new finds here.
 
 ### Plugins
 
+- [anthropics/claude-code — commit-commands](https://github.com/anthropics/claude-code/tree/main/plugins/commit-commands) — official Anthropic plugin for git flow. Provides `/commit` (auto-style commit), `/commit-push-pr` (branch + push + PR), and `/clean_gone` (prune local branches whose remotes are gone).
 - [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) — ultra-compressed communication mode. Cuts token usage ~75% while preserving technical accuracy. Source of `/caveman`, `/caveman-commit`, `/caveman-review`, `/compress`.
 
 ### Tools
