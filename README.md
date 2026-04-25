@@ -101,6 +101,11 @@ Claude-related plugins and references I rely on. Append new finds here.
 
 - [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) — ultra-compressed communication mode. Cuts token usage ~75% while preserving technical accuracy. Source of `/caveman`, `/caveman-commit`, `/caveman-review`, `/compress`.
 
+### Tools
+
+- [microsoft/markitdown](https://github.com/microsoft/markitdown) — Python utility that converts PDFs, Word, Excel, images, and audio into LLM-friendly Markdown. Handy preprocessor for feeding mixed documents into a Claude session or knowledge base.
+- [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) — agent-native personalized learning assistant: multi-modal chat, document analysis, persistent memory, autonomous tutoring agents.
+
 ### Reading
 
 - [karpathy — LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — design pattern for an LLM-maintained personal knowledge base: raw sources → interlinked markdown wiki → schema doc, so knowledge compounds across sessions instead of being re-derived from raw docs each query.
