@@ -92,3 +92,11 @@ Or, if a PRD file/issue already exists, jump straight to `/ship-it <prd-path-or-
 - `/audit` — stress-test a PRD or plan for missing edge cases before slicing.
 - `/design` — generate an HTML mockup for a screen before `/ship-it` implements it.
 - `/improve-codebase-architecture` — run before large feature work to surface refactors that make the slices testable.
+
+## Resources
+
+Claude-related plugins and references I rely on. Append new finds here.
+
+### Plugins
+
+- [JuliusBrussee/caveman](https://github.com/JuliusBrussee/caveman) — ultra-compressed communication mode. Cuts token usage ~75% while preserving technical accuracy. Source of `/caveman`, `/caveman-commit`, `/caveman-review`, `/compress`.
