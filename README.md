@@ -2,6 +2,10 @@
 
 Personal collection of [Claude Code skills](https://docs.claude.com/en/docs/claude-code/skills) for product, planning, and engineering work.
 
+## Credits
+
+Most skills here are forked from [mattpocock/skills](https://github.com/mattpocock/skills) with light edits to fit my workflow. Thanks to [@mattpocock](https://github.com/mattpocock) for the originals.
+
 ## Layout
 
 Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatter (name, description, trigger) plus the prompt body. `CLAUDE.md` is the global instructions file linked into `~/.claude/CLAUDE.md`.
@@ -34,3 +38,57 @@ cd ~/workspace/skills
 ## Usage
 
 After linking, each skill is invocable in Claude Code as `/<skill-name>` (e.g. `/audit`, `/ship-it`). Full descriptions and trigger conditions live in each skill's `SKILL.md` frontmatter.
+
+## Workflows
+
+Three entry points, all converging on `/ship-it`:
+
+```
+                  non-technical idea
+                         │
+                  /interview-me ──┐
+                                  │
+                  technical idea  │
+                         │        ▼
+                   /grill-me ─► /write-a-prd ─► /ship-it
+                                  ▲
+                  PRD already in head
+                         │        │
+                         └────────┘
+```
+
+### 1. Non-technical pitch → ship
+
+For vague product ideas, client-style requests, or anything where the requirements aren't engineer-ready.
+
+```
+/interview-me  →  /write-a-prd  →  /ship-it
+```
+
+`/interview-me` runs a four-pass business-analyst interview to surface decisions and tradeoffs in plain language. The output feeds `/write-a-prd`, which turns it into a structured PRD and files it as a GitHub issue. `/ship-it` slices the PRD into dependency-ordered issues and drives parallel TDD agents to merge.
+
+### 2. Technical plan → ship
+
+For engineer-to-engineer plans where jargon is fine and the goal is to pressure-test the design tree.
+
+```
+/grill-me  →  /write-a-prd  →  /ship-it
+```
+
+`/grill-me` interrogates every branch of the decision tree until each is resolved. Same downstream as above.
+
+### 3. PRD already drafted → ship
+
+When the requirements are clear enough to skip discovery.
+
+```
+/write-a-prd  →  /ship-it
+```
+
+Or, if a PRD file/issue already exists, jump straight to `/ship-it <prd-path-or-issue>`.
+
+### Optional checkpoints
+
+- `/audit` — stress-test a PRD or plan for missing edge cases before slicing.
+- `/design` — generate an HTML mockup for a screen before `/ship-it` implements it.
+- `/improve-codebase-architecture` — run before large feature work to surface refactors that make the slices testable.
