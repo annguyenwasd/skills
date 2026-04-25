@@ -15,7 +15,10 @@ Ask the user for the PRD GitHub issue number (or URL).
 
 If the PRD is not already in your context window, fetch it with `gh issue view <number>` (with comments).
 
-After reading the PRD body, extract the mockup URL: if the body contains a `## UI Mockup` section, parse the Gist URL from the markdown link `[View HTML mockup on GitHub Gist](<url>)` and store as `PRD_MOCKUP_URL`. If absent, `PRD_MOCKUP_URL = null`.
+After reading the PRD body, extract the UI block:
+1. **New format (preferred)** — extract the verbatim text of these sections if present: `## UI Screens`, `## Screen Flow`, `## State Flow`. Concatenate (in that order, with blank lines between) into `PRD_UI_BLOCK`. Also extract the list of Screen IDs (each `### Screen: <ID>` heading, stripping any `🔒` auth prefix) into `PRD_SCREEN_IDS`.
+2. **Legacy format (backwards compat)** — if `## UI Screens` is absent but the body contains `## UI Mockup`, parse the Gist URL from `[View HTML mockup on GitHub Gist](<url>)` into `PRD_MOCKUP_URL`. Set `PRD_UI_BLOCK = null`.
+3. If neither is present: `PRD_UI_BLOCK = null`, `PRD_MOCKUP_URL = null`, `PRD_SCREEN_IDS = []`.
 
 ### 2. Explore the codebase (optional)
 
@@ -178,13 +181,21 @@ Reference by number from the parent PRD:
 - User story 3
 - User story 7
 
-<!-- CONDITIONAL: include only when PRD_MOCKUP_URL != null AND uiInvolved == true -->
+<!-- CONDITIONAL: include only when uiInvolved == true AND PRD_UI_BLOCK != null -->
+
+<PRD_UI_BLOCK verbatim — `## UI Screens`, `## Screen Flow`, and (if present) `## State Flow` from the parent PRD>
+
+> Visual specification from the parent PRD. Implement to match these wireframes and flows. Screen IDs are stable identifiers — use them in test names and component names where natural.
+
+<!-- END CONDITIONAL -->
+
+<!-- CONDITIONAL (legacy): include only when uiInvolved == true AND PRD_UI_BLOCK == null AND PRD_MOCKUP_URL != null -->
 
 ## UI Mockup
 
 [View HTML mockup on GitHub Gist](<PRD_MOCKUP_URL>)
 
-> Visual specification from the parent PRD. Implement to match this mockup.
+> Visual specification from the parent PRD (legacy Gist format). Implement to match this mockup.
 
 <!-- END CONDITIONAL -->
 
