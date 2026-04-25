@@ -25,6 +25,49 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 | `tdd` | Red-green-refactor TDD loop for features and bugfixes. |
 | `write-a-prd` | Produce a PRD via interview, codebase exploration, and module design; submit as a GitHub issue. |
 
+## Prerequisites
+
+These must be installed before skills will work correctly. Claude will install any missing ones on setup.
+
+### GitHub CLI
+
+```bash
+brew install gh
+gh auth login
+```
+
+Required for all git workflow commands (`/commit`, `/commit-push`, `/commit-push-pr`, `/clean_gone`).
+
+### Caveman plugin
+
+```bash
+claude plugin marketplace add JuliusBrussee/caveman
+claude plugin install caveman@caveman
+```
+
+Provides `/caveman`, `/caveman-commit`, `/caveman-review`, `/caveman:compress`. Auto-activates every session via `SessionStart` hook.
+
+### commit-commands plugin
+
+```bash
+claude plugin marketplace add anthropics/claude-code
+claude plugin install commit-commands@claude-code-plugins
+```
+
+Provides `/commit`, `/commit-push-pr`, `/clean_gone`.
+
+The custom `/commit-push` command (commit + push, no PR) lives in `commands/commit-push.md` in this repo and is symlinked into `~/.claude/commands/` by `link-claude-md.sh`.
+
+### GitHub MCP server
+
+```bash
+claude mcp add -s user github \
+  -e GITHUB_PERSONAL_ACCESS_TOKEN="$(gh auth token)" \
+  -- docker run -i --rm -e GITHUB_PERSONAL_ACCESS_TOKEN ghcr.io/github/github-mcp-server
+```
+
+Requires Docker. Gives Claude structured GitHub API access (issues, PRs, repos) alongside the CLI. Token is sourced from the active `gh` session — re-run this command if the token rotates.
+
 ## Install
 
 ```bash
