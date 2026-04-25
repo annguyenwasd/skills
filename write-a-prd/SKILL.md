@@ -19,17 +19,17 @@ This skill will be invoked when the user wants to create a PRD. You may skip ste
 
    **Skip the interview** if the user already says "I just ran /grill-me" or "/interview-me" and pastes a Resolved Plan — proceed to Step 4 with that as the input.
 
-3.5. **Detect whether this PRD involves UI changes, and if so, resolve the mockup.**
+3.5. **Detect whether this PRD involves UI changes, and if so, draft ASCII wireframes.**
 
 After completing the interview, scan the notes and conversation for these signals:
 
-**Triggers UI mockup flow (any one is sufficient):**
+**Triggers UI wireframe flow (any one is sufficient):**
 - A new page or screen will be created
 - An existing page or screen will be visually modified
 - A new UI component, form, dialog, modal, or dashboard element will be added
 - The user explicitly mentions "design", "layout", "looks like", or "UI"
 
-**Skip UI mockup flow (all of these apply):**
+**Skip UI wireframe flow (all of these apply):**
 - The change is API-only (new endpoint, changed contract, no frontend consumer)
 - The change is schema/migration-only
 - The change is an internal background job, worker, or CLI tool
@@ -39,56 +39,53 @@ After completing the interview, scan the notes and conversation for these signal
 - Question: "Does this PRD involve any changes to the UI (new pages, modified screens, new components)?"
 - Options: "Yes — includes UI changes" / "No — backend/API only"
 
-**If UI is involved — check for existing design before generating:**
+**If UI is involved — generate ASCII wireframes:**
 
-**Step A: Detect existing design**
+**Step A: Enumerate screens and states.**
 
-Check whether a design already exists from a prior `/grill-me` or `/design` session:
-1. Derive the slug from the PRD title (e.g. "Payment History Page" → `payment-history`).
-2. Run `ls ~/.design/<slug>/` — if versioned HTML files exist, an approved design is available.
-3. Also scan the conversation for: a file path ending in `.html`, a GitHub Gist URL, or an explicit "here is my design" reference from the user.
+Before drawing, ask the user once:
+- Viewport: "Mobile, desktop, or both?" (AskUserQuestion: "Mobile only" / "Desktop only" / "Both — draw separate wireframes")
+- For each screen, enumerate which of these states apply: **default / empty / loading / error / over-limit / auth-locked / disabled-input**. Draw one wireframe per `(screen, state)` that is meaningfully different. Skip states that collapse into the default (e.g., a screen with no async data has no "loading").
 
-**Step B: Present options based on what was found**
+Define a stable **Screen ID** per screen — short PascalCase token (e.g. `Dashboard`, `OrderDetail`, `EditProfile`). This same ID MUST appear as: the `### Screen: <ID>` heading, every Mermaid `flowchart` node, and every `stateDiagram-v2` reference. Do not drift.
 
-Use AskUserQuestion with the appropriate question:
+**Step B: Draw the wireframes.**
 
-- **If existing design file(s) found** (`~/.design/<slug>/vN.html` exists):
-  - Question: "Found an existing design for this feature. How do you want to proceed?"
-  - Options:
-    - "Use as-is — approve the existing mockup"
-    - "Enhance it — refine the existing mockup before approving"
-    - "Start fresh — ignore existing and generate a new mockup"
+Conventions (apply to every wireframe):
+- **Width**: 60 chars. Mobile wireframes: 40 chars. Pad short rows; do not exceed width.
+- **Box drawing**: outer frame `┌─┐│└┘├┤`. Inner separators `├──┤`.
+- **Element annotation**:
+  - Buttons: `[ Label ]`
+  - Primary buttons: `[[ Label ]]`
+  - Inputs: `[__________]` (placeholder name inside underscores OK: `[_email____]`)
+  - Dropdowns: `[ Label ▼ ]`
+  - Checkboxes: `[ ]` unchecked, `[x]` checked
+  - Links: `<Label>`
+  - Image/avatar: `(img)` or `(avatar)`
+  - Auth-required marker: prefix Screen ID heading with `🔒` (e.g. `### Screen: 🔒 Dashboard`)
+- **Text labels**: write raw English. Add `i18n: <key>` suffix on the same line for any label that needs translation, e.g. `[ Save ]    i18n: orders.actionSave`. Wireframe-only static labels (e.g. `[Logo]`) need no key.
+- **Fallback**: If a screen is too visually complex for ASCII (data-viz canvas, drag-drop, complex tables with > 8 columns), replace the wireframe with a `<screen-prose>` block describing layout zones in plain English. Note the limitation; do not force ASCII.
 
-- **If user provided a design path or Gist URL** but no local file:
-  - Read/fetch the provided design. Display it to the user and ask:
-  - Question: "You provided an existing design. How do you want to proceed?"
-  - Options:
-    - "Use as-is — approve this design"
-    - "Enhance it — refine this design before approving"
-    - "Start fresh — generate a new mockup instead"
+**Step C: Approval loop (max 3 rounds).**
 
-- **If no existing design found and none provided:**
-  - Proceed directly to generating a new mockup (Step C below).
+1. Present all wireframes to the user with AskUserQuestion:
+   - Question: "Do these wireframes look right?"
+   - Options: "Looks good — proceed" / "Needs changes"
+2. If "Needs changes": ask what to fix, revise, loop.
+3. After 3 revision rounds without approval, ask once: "Commit current wireframes and move on, defer UI to a later PRD, or keep iterating?" Default: commit.
 
-**Step C: Act on the user's choice**
+**Step D: Audit (optional but recommended).**
 
-- **"Use as-is"**: Record the existing slug and version number N. Skip to the Gist creation step below.
-- **"Enhance it"**: Read the design skill at `~/.claude/skills/design/SKILL.md`. Load the existing HTML as the starting version, then follow Steps 4–6 of that skill (iteration loop) until the user approves. Do NOT run Step 7.
-- **"Start fresh"** or **no existing design**: Read the design skill at `~/.claude/skills/design/SKILL.md`. Follow Steps 1 through 6 of that skill exactly, using the PRD feature name as the feature argument. Do NOT run Step 7.
+After approval, ask: "Run /audit on the wireframes to check for missing states / ambiguous rules?" (default: yes for any feature with > 2 screens). If yes, invoke `/audit` skill against the wireframe set. Address findings, then re-confirm approval.
 
-IMPORTANT CONSTRAINTS (all paths):
-- Derive the slug from the PRD title (e.g. "Payment History Page" → `payment-history`).
-- Loop through revision steps until the user selects "Looks good — proceed to code".
-- Record the final approved `<slug>` and version number `N`.
+**Step E: Record outputs.**
 
-After design approval, create a public GitHub Gist with the approved mockup:
+Record:
+- The final wireframe set (verbatim, embedded into `## UI Screens`).
+- Screen IDs list (used to populate `## Screen Flow` Mermaid nodes in Step 5).
+- Whether any screen has multi-step flow / async / retry / optimistic updates / wizard steps. If **any** screen does, populate `## State Flow` in Step 5; otherwise omit it.
 
-```bash
-GIST_URL=$(gh gist create ~/.design/<slug>/vN.html --desc "<PRD title> mockup")
-echo "Mockup Gist: $GIST_URL"
-```
-
-Replace `<slug>`, `N`, and `<PRD title>` with the actual values. Store `$GIST_URL` — it will be embedded in the PRD issue body in Step 5.
+No external tools, no Gist, no `/design` invocation. All content lives in the PRD issue body.
 
 **If UI is NOT involved:** skip this step entirely and proceed to Step 4.
 
@@ -105,7 +102,7 @@ If any modules involve API calls from the frontend, enumerate the endpoints thos
 
 Document these agreements before writing the PRD.
 
-5. Once you have a complete understanding of the problem and solution, use the template below to write the PRD body. If a mockup was created in Step 3.5, substitute `$GIST_URL` in the `## UI Mockup` template section with the actual Gist URL. If no mockup was created, omit the `## UI Mockup` section entirely.
+5. Once you have a complete understanding of the problem and solution, use the template below to write the PRD body. If wireframes were created in Step 3.5, embed them in the `## UI Screens` section and populate the `## Screen Flow` Mermaid block. If the feature has complex state transitions (loading/error/wizard steps/optimistic updates), also populate `## State Flow`. If no UI was involved, omit all three sections entirely.
 
 **Preview before creating.** Render the full PRD body to the user and ask for approval (use AskUserQuestion: "Looks good — create issue" / "Needs edits"). Iterate on edits until approved. Only then proceed to create the GitHub issue.
 
@@ -135,13 +132,73 @@ The problem that the user is facing, from the user's perspective.
 
 The solution to the problem, from the user's perspective.
 
-<!-- CONDITIONAL: Only include ## UI Mockup if a mockup was generated in Step 3.5. Omit entirely for non-UI PRDs. -->
+<!-- CONDITIONAL: Only include the following three sections if wireframes were generated in Step 3.5. Omit entirely for non-UI PRDs. -->
 
-## UI Mockup
+## UI Screens
 
-Mockup: [View HTML mockup on GitHub Gist]($GIST_URL)
+<!-- One ASCII wireframe per distinct (screen, state) pair from Step 3.5.
+     Heading = Screen ID. Same ID appears in Screen Flow and State Flow nodes.
+     Auth-required: prefix with 🔒. -->
 
-> This mockup was approved before the PRD was written. Refer to it as the visual specification. Implementation must not begin until /ship-it or /prd-to-plan is invoked.
+### Screen: Dashboard
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  [Logo]                                  [ User ▼ ]      │
+├──────────────────────────────────────────────────────────┤
+│                                                          │
+│   <Stats card>          <Chart card>                     │
+│                                                          │
+│   ┌────────────────────────────────────────────────┐     │
+│   │  Recent Orders (table)                         │     │
+│   └────────────────────────────────────────────────┘     │
+│                                                          │
+│   [[ New Order ]]   [ Export ]   i18n: orders.export     │
+└──────────────────────────────────────────────────────────┘
+```
+
+### Screen: Dashboard — empty state
+
+```
+┌──────────────────────────────────────────────────────────┐
+│  No orders yet.                                          │
+│  [[ Create your first order ]]                           │
+└──────────────────────────────────────────────────────────┘
+```
+
+## Screen Flow
+
+<!-- Mermaid node IDs MUST equal Screen IDs above.
+     Edges MUST be labeled with the trigger ("on submit", "click row", etc.).
+     Use {{guard}} on edges that require auth or other guards. -->
+
+```mermaid
+flowchart LR
+  Login -->|"submit valid creds"| Dashboard
+  Dashboard -->|"click row"| OrderDetail
+  OrderDetail -->|"click edit"| EditOrder
+  EditOrder -->|"save"| OrderDetail
+  Dashboard -.->|"session expired"| Login
+```
+
+<!-- CONDITIONAL: Include ## State Flow only when ≥1 screen has multi-step flow,
+     async loading, retry, optimistic updates, or wizard progression.
+     Omit for plain CRUD. Use one stateDiagram-v2 per stateful screen. -->
+
+## State Flow
+
+### EditOrder state machine
+
+```mermaid
+stateDiagram-v2
+  [*] --> Idle
+  Idle --> Submitting: click save
+  Submitting --> Saved: 200 ok
+  Submitting --> Error: 4xx/5xx
+  Error --> Idle: dismiss
+  Error --> Submitting: retry
+  Saved --> [*]
+```
 
 <!-- END CONDITIONAL -->
 

@@ -66,6 +66,7 @@ Task status values (in order): `pending → in-progress → pr-open → ci-pass 
     "reviewFixAttempts": 0,
     "notes": "",
     "uiInvolved": false,
+    "uiBlock": null,
     "uiMockupUrl": null
   }]
 }
@@ -92,7 +93,10 @@ If `--prd` is a file path, read it.
 
 Store `PRD_TITLE`, `PRD_BODY`, `PRD_SOURCE` (issue number or file path).
 
-Extract `PRD_MOCKUP_URL`: if `PRD_BODY` contains a `## UI Mockup` section, parse the Gist URL from `[View HTML mockup on GitHub Gist](<url>)`. Store in JSON sidecar as `"prdMockupUrl"`. If absent, `prdMockupUrl = null`.
+Extract the UI block from `PRD_BODY`:
+1. **New format (preferred)** — concatenate the verbatim text of these sections (in order, blank lines between, only those that exist): `## UI Screens`, `## Screen Flow`, `## State Flow`. Store as `PRD_UI_BLOCK` and JSON sidecar `"prdUiBlock"`. Also extract Screen IDs (every `### Screen: <ID>` heading, stripping `🔒` auth prefix) into `prdScreenIds`.
+2. **Legacy format (backwards compat)** — if `## UI Screens` is absent but `## UI Mockup` is present, parse the Gist URL from `[View HTML mockup on GitHub Gist](<url>)` into `PRD_MOCKUP_URL` / `"prdMockupUrl"`. Set `prdUiBlock = null`.
+3. If neither: `prdUiBlock = null`, `prdMockupUrl = null`, `prdScreenIds = []`.
 
 Generate `PRD_SLUG`: lowercase 4–5 word kebab from title. Example: "Invoice Management System v2" → `invoice-mgmt-v2`
 
@@ -111,7 +115,8 @@ id:                 integer (1-indexed)
 title:              kebab slug (for branch/worktree names)
 displayTitle:       short human title
 prdSection:         verbatim PRD paragraph(s) this task maps to (used in PR body)
-uiMockupUrl:        prdMockupUrl when uiInvolved == true AND prdMockupUrl != null, else null
+uiBlock:            prdUiBlock when uiInvolved == true AND prdUiBlock != null, else null
+uiMockupUrl:        prdMockupUrl when uiInvolved == true AND prdUiBlock == null AND prdMockupUrl != null, else null (legacy)
 ```
 
 After §4 user approval, compute **execution waves**:
@@ -262,13 +267,21 @@ gh issue create \
 
 <userStories>
 
-<!-- CONDITIONAL: include only when task.uiMockupUrl != null -->
+<!-- CONDITIONAL: include only when task.uiBlock != null -->
+
+<task.uiBlock verbatim — `## UI Screens`, `## Screen Flow`, and (if present) `## State Flow` from the parent PRD>
+
+> Visual specification from the parent PRD. Implement to match these wireframes and flows. Screen IDs are stable identifiers — reuse them in component and test names where natural.
+
+<!-- END CONDITIONAL -->
+
+<!-- CONDITIONAL (legacy): include only when task.uiBlock == null AND task.uiMockupUrl != null -->
 
 ## UI Mockup
 
 [View HTML mockup on GitHub Gist](<uiMockupUrl>)
 
-> Visual specification from the parent PRD. Implement to match this mockup.
+> Visual specification from the parent PRD (legacy Gist format). Implement to match this mockup.
 
 <!-- END CONDITIONAL -->
 

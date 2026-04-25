@@ -27,7 +27,8 @@ fi
 context_part=""
 remaining=$(echo "$input" | jq -r '.context_window.remaining_percentage // empty')
 if [ -n "$remaining" ]; then
-  context_part=" ctx:$(printf '%.0f' "$remaining")%"
+  used=$(echo "$remaining" | awk '{printf "%.0f", 100 - $1}')
+  context_part=" ctx:${used}%"
 fi
 
 # Rate limits (Claude.ai subscription usage)
