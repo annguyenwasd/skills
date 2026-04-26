@@ -18,7 +18,8 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 | `design` | Generate an HTML mockup for a screen before implementing it. |
 | `grill-me` | Interrogate a technical plan branch-by-branch until every decision is resolved. |
 | `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability. |
-| `interactive-qa` | Conversational bug-reporting session that spawns parallel explore+fix agents. |
+| `qa` | Sequential QA session that fixes bugs one at a time on a feature branch and queues additional bugs automatically. |
+| `qa-worktree` | Parallel QA session that spawns one isolated worktree and explore+fix agent per bug concurrently. Supports `--pr` for per-bug pull requests. |
 | `interview-me` | Business-analyst interview to pressure-test a non-technical client's plan. |
 | `prd-to-issues` | Slice a PRD into vertical, independently-shippable GitHub issues. |
 | `ship-it` | End-to-end PRD orchestrator — issue DAG, parallel agents, TDD per slice. |

@@ -1,23 +1,19 @@
 ---
-name: interactive-qa
-description: Interactive QA session where user reports bugs conversationally. By default, fixes bugs one at a time on a feature branch in the current repo and queues additional bugs entered while a fix is in flight; pass `--worktree` to spawn parallel agents in isolated worktrees instead. Every fix must follow strict TDD RED-GREEN-REFACTOR — TDD_SKIPPED is a hard fail with no exceptions. When a bug is fixed, prompts user interactively (root cause + fix summary) to merge or re-fix. After merge, branch is kept for manual testing; user confirms fix or requests re-fix before branch is removed. Failed bugs get GitHub issues. Use when user wants bugs fixed on the spot during QA, mentions "interactive-qa", or wants TDD auto-fix during QA.
+name: qa
+description: Interactive QA session where user reports bugs conversationally. Fixes bugs one at a time on a feature branch in the current repo and queues additional bugs entered while a fix is in flight. Every fix must follow strict TDD RED-GREEN-REFACTOR — TDD_SKIPPED is a hard fail with no exceptions. When a bug is fixed, prompts user interactively (root cause + fix summary) to merge or re-fix. After merge, branch is kept for manual testing; user confirms fix or requests re-fix before branch is removed. Failed bugs get GitHub issues. Use when user wants bugs fixed on the spot during QA, mentions "qa", or wants sequential TDD auto-fix during QA.
 model: opus
-argument-hint: "(--prd <issue-number>) (--pr) (--worktree)"
+argument-hint: "(--prd <issue-number>)"
 ---
 
 # Interactive QA Session
 
-Run an interactive QA session. User describes bugs. **By default**, fix bugs one at a time on a feature branch in this repo — additional bugs entered while a fix is in flight are queued and started automatically when the active fix resolves. Pass `--worktree` to instead spawn one explore+fix agent per bug in its own git worktree (parallel, no batching). When the user says "done", stop accepting new bugs but keep handling agent completions, approvals, re-fixes, and queue drains. The session closes automatically once every bug is `approved` or `failed`.
+Run an interactive QA session. User describes bugs. Fix bugs one at a time on a feature branch in this repo — additional bugs entered while a fix is in flight are queued and started automatically when the active fix resolves. When the user says "done", stop accepting new bugs but keep handling agent completions, approvals, re-fixes, and queue drains. The session closes automatically once every bug is `approved` or `failed`.
 
 ## Arguments
 
 - `--prd <number>` — (optional) GitHub issue number of the parent PRD. When provided, every GitHub issue filed in this session gets labeled `PRD-<number>` and `QA`.
-- `--pr` — (optional) Instead of merging directly, create a PR per bug on approval, auto-merge it via `gh pr merge --squash`, then pull to update `BASE_BRANCH`. **Requires `--worktree`.**
-- `--worktree` — (optional) Spawn each bug in its own git worktree so multiple agents can work in parallel. **Default is OFF.** Sequential mode (the default) runs one agent at a time on a feature branch in the main repo and queues additional bugs entered while a fix is in flight.
 
-Parse at session start. Store as `PRD_NUMBER` (integer or null), `PR_MODE` (true/false), and `WORKTREE_MODE` (true/false) in context.
-
-**Constraint:** if `PR_MODE=true && WORKTREE_MODE=false`, hard-fail at session start with: *"`--pr` requires `--worktree` (PR-per-bug only makes sense with parallel worktrees). Re-run with `--worktree --pr` or drop `--pr`."*
+Parse at session start. Store as `PRD_NUMBER` (integer or null) in context.
 
 ## Session start prechecks
 
@@ -32,23 +28,8 @@ git rev-parse HEAD             >/dev/null 2>&1 || abort "Repo has no commits."
 BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
 [ "$BASE_BRANCH" != "HEAD" ] || abort "Detached HEAD — checkout a branch first."
 
-# 3. Clean working tree
-#    Default mode: agent commits directly in this repo, so WIP would interleave with the fix.
-#    --worktree mode: WIP would be invisible to the worktree agent.
-#    Either way, require a clean start.
+# 3. Clean working tree — agent commits directly in this repo, so WIP would interleave with the fix.
 [ -z "$(git status --porcelain)" ] || abort "Uncommitted changes in $BASE_BRANCH — commit or stash before QA."
-
-# 4. --pr requires --worktree
-if [ "$PR_MODE" = true ] && [ "$WORKTREE_MODE" != true ]; then
-  abort "--pr requires --worktree (PR-per-bug only makes sense with parallel worktrees). Re-run with --worktree --pr or drop --pr."
-fi
-
-# 5. PR mode needs gh auth + a remote tracking branch
-if [ "$PR_MODE" = true ]; then
-  gh auth status >/dev/null 2>&1 || abort "PR mode needs 'gh auth login'."
-  git ls-remote --exit-code origin "$BASE_BRANCH" >/dev/null 2>&1 \
-    || abort "PR mode needs $BASE_BRANCH on origin."
-fi
 ```
 
 Store `BASE_BRANCH` in context. All rebases and merges target this branch.
@@ -89,7 +70,6 @@ commitHash:    null | 40-char hash
 issueNumber:   null | integer
 failureReason: null | string
 branch:        null | string  (e.g. "fix-off-by-one-split"; set when bug starts fixing)
-worktreePath:  null | string  (only set in --worktree mode; null in default sequential mode)
 testFilePath:  null | string  (set when agent reports test file used)
 rootCause:     null | string  (one sentence parsed from agent SUCCESS line)
 fixSummary:    null | string  (one sentence parsed from agent SUCCESS line)
@@ -97,7 +77,7 @@ fixSummary:    null | string  (one sentence parsed from agent SUCCESS line)
 
 ---
 
-## Phase A — Bug collection + agent launch (queueing in default mode)
+## Phase A — Bug collection + agent launch
 
 ### 1. Listen and clarify
 
@@ -121,37 +101,20 @@ As soon as the bug description is collected — do NOT wait for "done" — immed
 REPO_ROOT=$(git rev-parse --show-toplevel)
 ```
 
-**c) Compute branch slug.** Resolve collisions against existing branches in both modes; in `--worktree` mode also against the on-disk worktree directory:
+**c) Compute branch slug.** Resolve collisions against existing branches:
 
 ```bash
 SLUG="fix-$(echo "<title>" | sed 's/[^a-zA-Z0-9]/-/g' | tr '[:upper:]' '[:lower:]' | tr -s '-' | cut -c1-40)"
 
 i=2
-if [ "$WORKTREE_MODE" = true ]; then
-  while [ -e "${REPO_ROOT}/../${SLUG}" ] || git -C "$REPO_ROOT" show-ref --quiet "refs/heads/${SLUG}"; do
-    SLUG="${SLUG%-[0-9]*}-$i"; i=$((i+1))
-  done
-else
-  while git -C "$REPO_ROOT" show-ref --quiet "refs/heads/${SLUG}"; do
-    SLUG="${SLUG%-[0-9]*}-$i"; i=$((i+1))
-  done
-fi
+while git -C "$REPO_ROOT" show-ref --quiet "refs/heads/${SLUG}"; do
+  SLUG="${SLUG%-[0-9]*}-$i"; i=$((i+1))
+done
 ```
 
-Store `branch=$SLUG`. `worktreePath` stays null until step 2d sets it (only in `--worktree` mode).
+Store `branch=$SLUG`.
 
-**d) Branch on `WORKTREE_MODE`:**
-
-#### `WORKTREE_MODE=true` (parallel)
-
-```bash
-WORKTREE_PATH="${REPO_ROOT}/../${SLUG}"
-git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" -b "$SLUG"
-```
-
-Store `worktreePath=$WORKTREE_PATH`. Spawn the explore+fix agent (`run_in_background: true`, `subagent_type: general-purpose`) using the §agent-prompt template with `WORK_DIR=$WORKTREE_PATH`. Substitute `TEST_CMD` and `MARKER_PREFIX` from session context. Set `status=fixing`. Print: `#<id> <title> — explore+fix agent started in worktree $WORKTREE_PATH.`
-
-#### `WORKTREE_MODE=false` (default, sequential)
+**d) Spawn agent or queue:**
 
 If **no other bug** has `status` in `{fixing, pending-review}`, this bug starts immediately:
 
@@ -163,7 +126,7 @@ If **no other bug** has `status` in `{fixing, pending-review}`, this bug starts 
 git -C "$REPO_ROOT" checkout -b "$SLUG" "$BASE_BRANCH"
 ```
 
-`worktreePath` stays null. Spawn the explore+fix agent (`run_in_background: true`, `subagent_type: general-purpose`) using the §agent-prompt template with `WORK_DIR=$REPO_ROOT`. Set `status=fixing`. Print: `#<id> <title> — explore+fix agent started on branch $SLUG.`
+Spawn the explore+fix agent (`run_in_background: true`, `subagent_type: general-purpose`) using the §agent-prompt template with `WORK_DIR=$REPO_ROOT`. Substitute `TEST_CMD` and `MARKER_PREFIX` from session context. Set `status=fixing`. Print: `#<id> <title> — explore+fix agent started on branch $SLUG.`
 
 Otherwise (an agent is already running or a fix is awaiting review), queue this bug:
 
@@ -184,13 +147,13 @@ After spawning the agent (or queueing it), print the current bug table:
 
 Then immediately continue: `What's the next bug? (or say "done" to wait for results)`
 
-In `--worktree` mode, all agents run in parallel — N bugs = N concurrent agents. In default mode, exactly one agent runs at a time; additional bugs sit in the `queued` column until the active fix resolves.
+Exactly one agent runs at a time; additional bugs sit in the `queued` column until the active fix resolves.
 
 ---
 
 ## Phase B — Wait for completion (fires when user says "done")
 
-In default (sequential) mode there is at most one running agent; the table will show queued bugs that have not started yet. Each time an active bug resolves, §coordinator drains the queue (see §coordinator below).
+There is at most one running agent; the table will show queued bugs that have not started yet. Each time an active bug resolves, §coordinator drains the queue (see §coordinator below).
 
 ### Step 1 — Acknowledge
 
@@ -212,16 +175,16 @@ Session ends only once every bug is `approved` or `failed`. Then run Phase D.
 
 ## §coordinator — processing agent results
 
-> **Invariant.** Every transition to `approved` or `failed` — anywhere in this spec, including all four failure sites in §merge-flow — MUST invoke the queue-drain check below before yielding control. In `--worktree` mode the check is a no-op; in default mode it's the only mechanism that starts queued bugs.
+> **Invariant.** Every transition to `approved` or `failed` — anywhere in this spec, including all four failure sites in §merge-flow — MUST invoke the queue-drain check below before yielding control. This is the only mechanism that starts queued bugs.
 
 ### TDD enforcement check
 
 Before accepting any `SUCCESS`, confirm the marker exists somewhere in the **branch's diff vs `BASE_BRANCH`** (not just HEAD — TDD may produce multiple commits, and HEAD may have moved off the bug branch):
 
 ```bash
-# WORK_DIR = <worktreePath> in --worktree mode, $REPO_ROOT in default mode.
+# WORK_DIR = $REPO_ROOT
 # Use the branch ref, not HEAD, so the check is correct regardless of current checkout.
-git -C <WORK_DIR> diff "$BASE_BRANCH"...<branch> -- '**/*test*' '**/*spec*' '**/__tests__/**' \
+git -C "$REPO_ROOT" diff "$BASE_BRANCH"...<branch> -- '**/*test*' '**/*spec*' '**/__tests__/**' \
   | grep -E "qa-fix:#<id>\b"
 ```
 
@@ -247,12 +210,12 @@ If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`.
 - `FAILED: <reason>` → `status=failed`, failureReason=reason. Then run §coordinator queue-drain.
 - `TDD_SKIPPED: <reason>` → `status=failed`, failureReason=`TDD skipped: <reason>` **(hard fail, never retry)**. Then run §coordinator queue-drain.
 
-### Drain the queue (default mode only)
+### Drain the queue
 
-Whenever a bug transitions to `approved` or `failed`, in default mode immediately start the next queued bug:
+Whenever a bug transitions to `approved` or `failed`, immediately start the next queued bug:
 
 ```
-if WORKTREE_MODE=false and no other bug has status in {fixing, pending-review}:
+if no other bug has status in {fixing, pending-review}:
   pick the lowest-id bug with status=queued (FIFO)
   if none → skip
   # Working tree must be clean. HEAD may still be on the just-failed bug branch
@@ -275,7 +238,7 @@ The re-fix flow (Phase C) does **not** drain the queue: re-fix sets the bug back
 You are an explore+fix agent. Fix exactly one bug using strict TDD.
 
 ═══════════════════════════════════════
-WORK DIR     : <WORK_DIR>     # = $WORKTREE_PATH in --worktree mode, $REPO_ROOT in default mode
+WORK DIR     : <WORK_DIR>     # = $REPO_ROOT
 REPO ROOT    : <repoRoot>
 BRANCH       : <branch>       # already checked out by the orchestrator
 BUG ID       : #<id>
@@ -305,7 +268,7 @@ Do NOT start writing code until you have a clear picture.
 TDD PROTOCOL — ZERO EXCEPTIONS
 ═══════════════════════════════════════
 
-All work happens inside `<WORK_DIR>` on branch `<branch>`, which has already been checked out for you. In `--worktree` mode the orchestrator did this via `git worktree add -b`; in default sequential mode the orchestrator did `git checkout -b` in the main repo. Either way the branch is your starting point — do not switch branches. Never push to remote.
+All work happens inside `<WORK_DIR>` on branch `<branch>`, which has already been checked out for you via `git checkout -b` in the main repo. Do not switch branches. Never push to remote.
 
 Read and follow the TDD skill at `~/.claude/skills/tdd/SKILL.md`.
 Apply its RED-GREEN-REFACTOR cycle for this bug fix. Test runner: `cd <WORK_DIR> && <TEST_CMD> [<test file>]`
@@ -357,16 +320,11 @@ Called from §coordinator when user picks "Merge" on a `pending-review` bug.
 
 **Step 1 — Rebase onto `BASE_BRANCH`:**
 
-`WORK_DIR` resolves to `<worktreePath>` in `--worktree` mode and to `$REPO_ROOT` in default mode. In default mode the bug branch is already checked out in the main repo (orchestrator did `git checkout -b` before spawning the agent), so the rebase happens in place.
+`WORK_DIR` = `$REPO_ROOT`. The bug branch is already checked out in the main repo (orchestrator did `git checkout -b` before spawning the agent), so the rebase happens in place.
 
 ```bash
 cd <WORK_DIR>
-if [ "$PR_MODE" = true ]; then
-  git fetch origin "$BASE_BRANCH"
-  REBASE_TARGET="origin/$BASE_BRANCH"
-else
-  REBASE_TARGET="$BASE_BRANCH"
-fi
+REBASE_TARGET="$BASE_BRANCH"
 git rebase "$REBASE_TARGET"
 ```
 
@@ -380,93 +338,47 @@ After a successful rebase, run `<TEST_CMD>`. Fail → `status=failed`, `failureR
 
 ---
 
-**Step 2 — Merge:** branches on `PR_MODE`.
+**Step 2 — Merge:**
 
 Before any merge, refuse if `BASE_BRANCH` in the main repo has uncommitted changes:
 ```bash
 [ -z "$(git -C "$REPO_ROOT" status --porcelain)" ] || abort "Uncommitted changes in $BASE_BRANCH — resolve before approving."
 ```
 
-#### Direct merge (`PR_MODE=false`)
-
 ```bash
 git -C "$REPO_ROOT" checkout "$BASE_BRANCH"
 git -C "$REPO_ROOT" merge --ff-only "<branch>" || {
   # Fast-forward merge failed — base branch advanced.
-  # Reachable in --worktree mode (parallel bugs racing for ff merge).
-  # In default sequential mode this is unreachable: only one bug holds the active slot
-  # so BASE_BRANCH cannot advance between rebase and merge — the rebase already covers drift.
   # Mark this bug failed; let the next take over.
   status=failed; failureReason="Fast-forward merge failed — base advanced; rebase #<id> again."
   # Then run §coordinator queue-drain.
 }
 ```
 
-#### `--pr` mode (`PR_MODE=true`)
-
-`--pr` requires `--worktree`, so `<WORK_DIR>` here is always `$WORKTREE_PATH`.
-
-```bash
-cd <WORK_DIR>
-git push -u origin <branch>
-PR_URL=$(gh pr create \
-  --title "fix: <title>" \
-  --base "$BASE_BRANCH" \
-  --head <branch> \
-  --body "$(cat <<EOF
-## Summary
-
-Fixes #<id>: <title>
-
-## Test
-
-Test marker \`<MARKER_PREFIX>\` in \`<testFilePath>\`.
-
-🤖 Generated with [Claude Code](https://claude.com/claude-code)
-EOF
-)")
-
-gh pr merge --squash --auto "$PR_URL"
-until [ "$(gh pr view "$PR_URL" --json state -q .state)" = "MERGED" ]; do sleep 10; done
-
-git -C "$REPO_ROOT" checkout "$BASE_BRANCH"
-git -C "$REPO_ROOT" pull --ff-only origin "$BASE_BRANCH"
-```
-
-If merge stays `OPEN` past 30 min → `status=failed`, `failureReason="PR did not auto-merge: $PR_URL"`. Then run §coordinator queue-drain (no-op in `--worktree` mode, but kept for invariant consistency).
-
 ---
 
-**Step 3 — Post-merge confirmation (branch/worktree NOT removed yet):**
+**Step 3 — Post-merge confirmation (branch NOT removed yet):**
 
-Call `AskUserQuestion`. The wording differs by mode — in default mode there is no separate worktree path (the merged code is on `BASE_BRANCH` in the main repo):
+Call `AskUserQuestion`:
 
 ```
-# WORKTREE_MODE=true:
-question: "#<id> `<title>` merged into `<BASE_BRANCH>`. Test manually at `<worktreePath>`. Fixed?"
-
-# WORKTREE_MODE=false:
 question: "#<id> `<title>` merged into `<BASE_BRANCH>`. Test manually in this repo. Fixed?"
-
 header:   "Confirm #<id>"
 options:
-  - label: "Confirmed fixed"  description: "Remove branch (and worktree, if any), mark approved"
+  - label: "Confirmed fixed"  description: "Remove branch, mark approved"
   - label: "Still broken"     description: "Describe what's wrong — re-fix on same branch, then merge again"
 ```
 
 - If "Confirmed fixed":
   ```bash
-  if [ "$WORKTREE_MODE" = true ]; then
-    git -C "$REPO_ROOT" worktree remove <worktreePath> --force
-  fi
   git -C "$REPO_ROOT" branch -D <branch> 2>/dev/null || true
   ```
   Set `status=approved`. Print: `#<id> <title> — merged and confirmed ✓`. Then run the queue-drain step from §coordinator.
 
 - If "Still broken" / Other (user typed feedback):
   - `status=fixing`
-  - In default mode, re-checkout `<branch>` in the main repo first: `git -C "$REPO_ROOT" checkout <branch>`. (Already on the branch in `--worktree` mode.)
-  - Spawn new explore+fix agent (`run_in_background: true`) on the **same worktree/branch** using §agent-prompt with RE-FIX NOTE (see Phase C). `WORK_DIR` matches the original mode.
+  - Re-checkout `<branch>` in the main repo: `git -C "$REPO_ROOT" checkout <branch>`.
+  - Spawn new explore+fix agent (`run_in_background: true`) on the **same branch** using §agent-prompt with RE-FIX NOTE (see Phase C). `WORK_DIR=$REPO_ROOT`.
   - When agent completes → back to §coordinator (same flow: AskUserQuestion merge? → §merge-flow → post-merge confirmation).
 
 ---
@@ -477,11 +389,11 @@ Handles cases where the user is not satisfied with a fix — either before or af
 
 ### User describes remaining problem with `#<id>`
 
-User is not satisfied — they describe what's still wrong. Re-fix on the **same branch** (do not create a new branch; in `--worktree` mode, also reuse the same worktree):
+User is not satisfied — they describe what's still wrong. Re-fix on the **same branch** (do not create a new branch):
 
 1. Set `status=fixing`
-2. In default mode, ensure the bug branch is checked out in the main repo: `git -C "$REPO_ROOT" checkout <branch>`. (Already current in `--worktree` mode.)
-3. Spawn a new explore+fix agent (`run_in_background: true`) using §agent-prompt with `WORK_DIR=$REPO_ROOT` (default mode) or `WORK_DIR=$WORKTREE_PATH` (`--worktree` mode), plus the additional context:
+2. Ensure the bug branch is checked out in the main repo: `git -C "$REPO_ROOT" checkout <branch>`.
+3. Spawn a new explore+fix agent (`run_in_background: true`) using §agent-prompt with `WORK_DIR=$REPO_ROOT`, plus the additional context:
 
 ```
 RE-FIX NOTE: A previous fix was committed on this branch but did not satisfy the user.
@@ -568,9 +480,9 @@ For each bug with `status: failed`:
 
 3. Parse the trailing number from `$ISSUE_URL` and store as `issueNumber` on the bug record. Print `$ISSUE_URL`.
 
-### Cleanup branches and worktrees
+### Cleanup branches
 
-Approved bugs already had their branch (and worktree, if any) removed in §merge-flow. Here we clean up **failed** bugs (left in place for inspection until summary), but selectively — failures where the fix itself was valid (rebase conflict, regression after rebase, ff-only failure, PR stuck open) keep their branch so the user can investigate or recover the work; failures where no usable fix exists (`TDD skipped`, agent `FAILED`, agent timed out) drop the branch.
+Approved bugs already had their branch removed in §merge-flow. Here we clean up **failed** bugs (left in place for inspection until summary), but selectively — failures where the fix itself was valid (rebase conflict, regression after rebase, ff-only failure) keep their branch so the user can investigate or recover the work; failures where no usable fix exists (`TDD skipped`, agent `FAILED`, agent timed out) drop the branch.
 
 Failure reason → keep branch?
 
@@ -582,29 +494,18 @@ Failure reason → keep branch?
 | `Rebase conflict — manual resolution required`     | **yes**      |
 | `Regression after rebase`                          | **yes**      |
 | `Fast-forward merge failed — base advanced ...`    | **yes**      |
-| `PR did not auto-merge: ...`                       | **yes**      |
 
 ```bash
 # For each bug with status=failed:
-if [ "$WORKTREE_MODE" = true ]; then
-  git -C "$REPO_ROOT" worktree remove <worktreePath> --force
-fi
 if [ "<keepBranch>" = false ]; then
   git -C "$REPO_ROOT" branch -D <branch> 2>/dev/null || true
 fi
 # else: keep branch for manual recovery; print its name in the summary.
 
-# After all removals:
-if [ "$WORKTREE_MODE" = true ]; then
-  git -C "$REPO_ROOT" worktree prune
-fi
-
-# Make sure we end on the base branch in default mode (HEAD may currently be on a deleted bug branch).
+# Make sure we end on the base branch (HEAD may currently be on a deleted bug branch).
 git -C "$REPO_ROOT" checkout "$BASE_BRANCH" 2>/dev/null || true
 ```
 
 For each preserved branch, print: `#<id> <title> — branch <branch> kept for manual recovery.`
 
 Print: `Branches cleaned up. Session closed.`
-
----

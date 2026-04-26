@@ -47,7 +47,7 @@ Before drawing, ask the user once:
 - Viewport: "Mobile, desktop, or both?" (AskUserQuestion: "Mobile only" / "Desktop only" / "Both — draw separate wireframes")
 - For each screen, enumerate which of these states apply: **default / empty / loading / error / over-limit / auth-locked / disabled-input**. Draw one wireframe per `(screen, state)` that is meaningfully different. Skip states that collapse into the default (e.g., a screen with no async data has no "loading").
 
-Define a stable **Screen ID** per screen — short PascalCase token (e.g. `Dashboard`, `OrderDetail`, `EditProfile`). This same ID MUST appear as: the `### Screen: <ID>` heading, every Mermaid `flowchart` node, and every `stateDiagram-v2` reference. Do not drift.
+Define a stable **Screen ID** per screen — short PascalCase token (e.g. `Dashboard`, `OrderDetail`, `EditProfile`). This same ID MUST appear as: the `### Screen: <ID>` heading, every Mermaid `flowchart` node, and every `graph TD` state node. Do not drift.
 
 **Step B: Draw the wireframes.**
 
@@ -173,6 +173,7 @@ The solution to the problem, from the user's perspective.
      Use {{guard}} on edges that require auth or other guards. -->
 
 ```mermaid
+%%{init: {'flowchart': {'curve': 'step'}}}%%
 flowchart LR
   Login -->|"submit valid creds"| Dashboard
   Dashboard -->|"click row"| OrderDetail
@@ -183,21 +184,24 @@ flowchart LR
 
 <!-- CONDITIONAL: Include ## State Flow only when ≥1 screen has multi-step flow,
      async loading, retry, optimistic updates, or wizard progression.
-     Omit for plain CRUD. Use one stateDiagram-v2 per stateful screen. -->
+     Omit for plain CRUD. Use one graph TD per stateful screen.
+     All Mermaid diagrams MUST use %%{init: {'flowchart': {'curve': 'step'}}}%%
+     for straight orthogonal (right-angle) lines. Never use stateDiagram-v2. -->
 
 ## State Flow
 
 ### EditOrder state machine
 
 ```mermaid
-stateDiagram-v2
-  [*] --> Idle
-  Idle --> Submitting: click save
-  Submitting --> Saved: 200 ok
-  Submitting --> Error: 4xx/5xx
-  Error --> Idle: dismiss
-  Error --> Submitting: retry
-  Saved --> [*]
+%%{init: {'flowchart': {'curve': 'step'}}}%%
+graph TD
+    S(( )) --> Idle
+    Idle -->|"click save"| Submitting
+    Submitting -->|"200 ok"| Saved
+    Submitting -->|"4xx/5xx"| Error
+    Error -->|"dismiss"| Idle
+    Error -->|"retry"| Submitting
+    Saved --> E(( ))
 ```
 
 <!-- END CONDITIONAL -->
