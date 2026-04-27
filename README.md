@@ -172,6 +172,7 @@ Planning skills write checklist files to `<project-root>/.checklist/`:
 |---|---|
 | `/interview-me` | `.checklist/interview-<YYYYMMDD-HHMMSS>.md` |
 | `/grill-me` | `.checklist/grill-<YYYYMMDD-HHMMSS>.md` |
+| `/audit` | `.checklist/audit-<YYYYMMDD-HHMMSS>.md` (from input spec, not gaps) |
 | `/write-a-prd` | `.checklist/prd-<issue-number>.md` |
 
 These files are git-ignored (added automatically by `/write-a-prd`; add `.checklist/` to your global gitignore for other workflows).
