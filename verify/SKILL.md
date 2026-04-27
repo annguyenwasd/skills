@@ -1,15 +1,15 @@
 ---
 name: verify
-description: Verify that a running app's behaviour matches a checklist of expected outcomes. Spawns a fresh-context subagent — no code knowledge, only the checklist and the live app — and reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Use after implementation to confirm requirements were met, not just tests. Invoke as /verify.
+description: Verify that a running app's behaviour matches a checklist of expected outcomes. Auto-starts the app if it isn't running, spawns a fresh-context subagent (curl-only, no code access) to verify each item, then shuts the app down. Reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Invoke as /verify.
 model: opus
-argument-hint: "--checklist <path> [--base-url <url>] [--timeout <seconds>]"
+argument-hint: "--checklist <path> [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>]"
 ---
 
 # /verify — Behavioural Verification
 
-Check that a running app matches a list of expected behaviours. Each checklist item is exercised against the live app by a fresh-context subagent. Results are reported as `PASS`, `FAIL`, `TIMEOUT`, `ASSUMED`, or `UNVERIFIABLE`.
+Check that an app matches a list of expected behaviours. Auto-starts the app if it isn't running. Verification runs in a fresh-context subagent with no code access. Results: `PASS`, `FAIL`, `TIMEOUT`, `ASSUMED`, `UNVERIFIABLE`.
 
-**Critical rule:** verification runs in a subagent that has zero knowledge of the implementation. Only the checklist and the running app are in scope. This prevents the implementer from rubber-stamping their own work.
+**Critical rule:** the verification subagent has zero knowledge of the implementation — only the checklist and the running app. This prevents the implementer from rubber-stamping their own work.
 
 ---
 
@@ -17,9 +17,10 @@ Check that a running app matches a list of expected behaviours. Each checklist i
 
 Parse from the invocation string:
 
-- `--checklist <path>` — **(required)** path to a file containing expected behaviours. Accepts Markdown, plain text, or any readable format.
+- `--checklist <path>` — **(required)** path to a file containing expected behaviours
 - `--base-url <url>` — base URL of the running app (default: `http://localhost:3000`)
 - `--timeout <seconds>` — max seconds to wait for async behaviours (default: 30)
+- `--start-cmd <command>` — override auto-detected start command
 
 If `--checklist` is missing: abort with `"--checklist <path> is required. Example: /verify --checklist .checklist/my-feature.md"`
 
@@ -27,30 +28,101 @@ If `--fix` is passed: abort with `"--fix is not yet available. Remove the flag a
 
 ---
 
-## Prechecks
-
-Run both before spawning the subagent. Abort on any failure.
+## Step 1 — Checklist precheck
 
 ```bash
-# 1. Checklist file exists and is readable
 [ -f "<checklist-path>" ] || abort "Checklist file not found: <checklist-path>"
-
-# 2. App is reachable (any HTTP response counts — even 404 means the app is up)
-# curl exits 0 on any HTTP response, non-zero only on connection failure
-curl -s -o /dev/null --max-time 5 "<base-url>" || abort "App not reachable at <base-url>. Start the app first, then re-run /verify."
 ```
 
 ---
 
-## Read the checklist
+## Step 2 — App readiness
 
-Read the checklist file. Extract every distinct expected behaviour as an ordered list. Accept any format — numbered list, bullet list, checkbox list `[ ]`, or prose paragraphs. Each sentence or item describing an observable outcome becomes one checklist entry.
+Check if the app is already running:
+
+```bash
+curl -s -o /dev/null --max-time 5 "<base-url>"
+# exit 0 = already running; non-zero = not running
+```
+
+**If already running:** set `APP_STARTED_BY_VERIFY=false`. Skip to §Step 4.
+
+**If not running:** proceed to §Step 3 (auto-start).
+
+---
+
+## Step 3 — Auto-start
+
+### 3a. Resolve start command
+
+If `--start-cmd` was provided: use it. Skip detection.
+
+Otherwise detect from the project root (use `git rev-parse --show-toplevel` to find it):
+
+**Detection order — stop at the first match:**
+
+1. **`package.json` scripts** — look for scripts named `dev`, `start`, `serve`, `preview` in that priority order.
+   - Detect package manager: `pnpm-lock.yaml` → `pnpm run`; `yarn.lock` → `yarn`; else → `npm run`
+   - Command: `<pm> run <script>`
+
+2. **`Procfile`** — if a `web:` entry exists, use the value after `web:`.
+
+3. **`Cargo.toml`** → `cargo run`
+
+4. **`pyproject.toml` or `setup.py` / `requirements.txt`**:
+   - `uvicorn` in deps → `uvicorn main:app --reload` (or `app:app` if `app.py` exists at root)
+   - `django` in deps → `python manage.py runserver`
+   - `flask` in deps → `flask run`
+
+5. **`manage.py`** at project root → `python manage.py runserver`
+
+6. **`Makefile`** with a `run`, `serve`, or `start` target → `make <target>`
+
+7. **Nothing found:** abort with:
+   ```
+   Cannot detect start command. Start the app manually or re-run with:
+     /verify --checklist <path> --start-cmd "<your start command>"
+   ```
+
+### 3b. Start the app
+
+Run the resolved command in the background from the project root. Capture the process PID:
+
+```bash
+cd <project-root>
+<start-command> &
+APP_PID=$!
+```
+
+Set `APP_STARTED_BY_VERIFY=true`.
+
+### 3c. Wait for ready
+
+Poll `<base-url>` every 2 seconds for up to 30 seconds:
+
+```bash
+for i in $(seq 1 15); do
+  curl -s -o /dev/null --max-time 2 "<base-url>" && break
+  sleep 2
+done
+```
+
+If still unreachable after 30s: kill the process (`kill $APP_PID 2>/dev/null`), then abort:
+```
+App failed to start within 30s. Check the start command output above for errors.
+```
+
+---
+
+## Step 4 — Read the checklist
+
+Read the checklist file. Extract every distinct expected behaviour as an ordered list. Accept any format — numbered list, bullet list, checkbox list `[ ]`, prose paragraphs. Each sentence or item describing an observable outcome becomes one entry.
 
 Store as `CHECKLIST_ITEMS` (numbered, one per line).
 
 ---
 
-## Spawn the verification subagent
+## Step 5 — Spawn verification subagent
 
 Spawn one `general-purpose` Agent (foreground). Pass **only** the checklist items and connection parameters — no codebase context, no git history, no PRD, no conversation history.
 
@@ -170,14 +242,24 @@ OUTPUT — your final output must be EXACTLY this format
 
 ---
 
-## Display result
+## Step 6 — Display result and shutdown
 
-Wait for the subagent to complete. Print its full output verbatim.
+Print the subagent's full output verbatim.
 
 If the subagent errors or produces no output:
 ```
 VERIFY_ERROR: subagent did not produce a report.
-Check that the app is still running at <base-url> and re-run.
+```
+
+**Always** run shutdown after, regardless of outcome:
+
+```bash
+# Only kill if /verify started the app
+if [ "$APP_STARTED_BY_VERIFY" = "true" ]; then
+  kill $APP_PID 2>/dev/null
+  wait $APP_PID 2>/dev/null
+  echo "App stopped."
+fi
 ```
 
 ---
@@ -186,5 +268,5 @@ Check that the app is still running at <base-url> and re-run.
 
 - Never pass codebase files, git history, PRD content, or implementation details to the subagent
 - Never attempt to fix failures — this skill reports only
-- Prechecks are hard gates — never skip them
+- Always shut down the app if `/verify` started it — even on error or early abort
 - Print the subagent report verbatim — do not summarise, editorialize, or reformat it
