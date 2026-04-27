@@ -2,7 +2,7 @@
 name: verify
 description: Verify that a running app's behaviour matches a checklist of expected outcomes. Auto-starts the app if it isn't running, spawns a fresh-context subagent (curl-only, no code access) to verify each item, then shuts the app down. Reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Invoke as /verify.
 model: opus
-argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>]"
+argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>] [--fix]"
 ---
 
 # /verify — Behavioural Verification
@@ -22,6 +22,7 @@ Parse from the invocation string:
 - `--base-url <url>` — base URL of the running app (default: `http://localhost:3000`)
 - `--timeout <seconds>` — max seconds to wait for async behaviours (default: 30)
 - `--start-cmd <command>` — override auto-detected start command
+- `--fix` — after verification, spawn a sequential TDD fix agent for each FAIL and TIMEOUT item; each agent opens a PR
 
 ### Checklist auto-resolve (when `--checklist` and `--prd` are both absent)
 
@@ -35,8 +36,6 @@ CHECKLIST_DIR="$(git rev-parse --show-toplevel 2>/dev/null)/.checklist"
   - Zero files → abort: `"No checklist found. Run /interview-me, /grill-me, or /write-a-prd first, or pass --checklist <path>."`
   - Exactly one file → use it. Print: `Using checklist: <path>`
   - Multiple files → print the list and abort: `"Multiple checklists found. Specify one with --checklist <path> or --prd <number>:"`
-
-If `--fix` is passed: abort with `"--fix is not yet available. Remove the flag and re-run."`
 
 ---
 
@@ -263,10 +262,9 @@ If the subagent errors or produces no output:
 VERIFY_ERROR: subagent did not produce a report.
 ```
 
-**Always** run shutdown after, regardless of outcome:
+**Always** shut down after, regardless of outcome:
 
 ```bash
-# Only kill if /verify started the app
 if [ "$APP_STARTED_BY_VERIFY" = "true" ]; then
   kill $APP_PID 2>/dev/null
   wait $APP_PID 2>/dev/null
@@ -276,9 +274,123 @@ fi
 
 ---
 
+## Step 7 — Fix loop (only when `--fix` is set)
+
+Skip entirely if `--fix` was not passed, or if there are zero FAIL/TIMEOUT items.
+
+Parse FAIL and TIMEOUT items from the subagent report. For each item **sequentially**:
+
+1. Derive a branch slug: lowercase kebab of first 6 words of item text, prefixed `verify-fix/`  
+   (e.g. `verify-fix/post-orders-invalid-payload-returns-400`)
+2. Spawn a foreground `general-purpose` Agent using §verify-fix-agent-prompt
+3. Wait for completion before starting the next item
+
+After all fix agents complete, print:
+
+```
+Fix summary:
+  FIX_COMPLETE    : N  (PRs opened — review and merge)
+  FIX_FAILED      : N  (could not implement — manual fix needed)
+  FIX_NOT_NEEDED  : N  (behaviour already works — checklist item may be inaccurate)
+```
+
+---
+
+## §verify-fix-agent-prompt
+
+```
+You are a fix agent. One behavioural verification item failed. Make it pass using strict TDD.
+
+═══════════════════════════════════════════════════════
+CONTEXT
+═══════════════════════════════════════════════════════
+REPO ROOT   : <repo-root>
+BASE BRANCH : <base-branch>
+FIX BRANCH  : <fix-branch>
+ITEM        : <failing checklist item — full text>
+EVIDENCE    : <what the app returned, from the verification report>
+
+═══════════════════════════════════════════════════════
+STEPS
+═══════════════════════════════════════════════════════
+
+── SETUP ────────────────────────────────────────────────
+  cd <repo-root>
+  git checkout -b <fix-branch>
+
+── DETECT TEST RUNNER ───────────────────────────────────
+  Check package.json scripts (test:run → test), pyproject.toml/pytest.ini → pytest,
+  Cargo.toml → cargo test, Makefile test target.
+  Store as TEST_CMD.
+
+── RED — write a failing test ───────────────────────────
+  Write ONE test that captures the expected behaviour from ITEM.
+  The test must exercise public interfaces only — no private methods.
+  Add this marker on the line IMMEDIATELY above the test function/call:
+    // verify-fix  (or # verify-fix for Python/Ruby)
+  Run it:
+    <TEST_CMD> <test-file>
+  It MUST fail before you write any fix code.
+  ▶ If it already passes: the behaviour works — the checklist item may be wrong.
+    Output: FIX_NOT_NEEDED: test already passes — <one-line explanation>
+    Do NOT commit. Do NOT open a PR. STOP.
+  ▶ If you CANNOT write a meaningful failing test:
+    Output: FIX_FAILED: cannot write failing test — <reason>. STOP.
+
+── GREEN — minimal implementation ───────────────────────
+  Write the minimal code to make the failing test pass.
+  Run targeted test (must pass), then full suite (no regressions).
+  ▶ If full suite fails due to your change after 3 attempts:
+    Output: FIX_FAILED: regression introduced — <file:line>. STOP.
+
+── REFACTOR ─────────────────────────────────────────────
+  One focused pass: remove obvious duplication from GREEN phase only.
+  Re-run full suite. If it fails: revert the refactor.
+
+── COMMIT ───────────────────────────────────────────────
+  git add <specific files — never git add . or git add -A>
+  git commit -m "fix: <item-slug>
+
+  Co-Authored-By: Claude Opus 4.7 <noreply@anthropic.com>"
+
+── PUSH + PR ────────────────────────────────────────────
+  git push -u origin <fix-branch>
+  gh pr create \
+    --title "fix: <item-slug>" \
+    --base <base-branch> \
+    --body "## Failing verification item
+
+<item text>
+
+## Evidence of failure
+
+<evidence>
+
+## What was fixed
+
+<one paragraph>
+
+## Test marker
+
+All new tests marked \`// verify-fix\`.
+Run: \`<TEST_CMD>\`
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)"
+
+═══════════════════════════════════════════════════════
+FINAL REPORT — last line must be EXACTLY one of:
+═══════════════════════════════════════════════════════
+  FIX_COMPLETE: <pr-url>
+  FIX_FAILED: <one-sentence reason>
+  FIX_NOT_NEEDED: <one-sentence reason>
+```
+
+---
+
 ## Rules
 
-- Never pass codebase files, git history, PRD content, or implementation details to the subagent
-- Never attempt to fix failures — this skill reports only
+- Never pass codebase files, git history, PRD content, or implementation details to the verification subagent
 - Always shut down the app if `/verify` started it — even on error or early abort
-- Print the subagent report verbatim — do not summarise, editorialize, or reformat it
+- Print the verification report verbatim — do not summarise, editorialize, or reformat it
+- `--fix` runs sequentially — never spawn fix agents in parallel (risk of merge conflicts)
+- Fix agents MAY read the codebase — unlike the verification subagent, they need code context to fix bugs
