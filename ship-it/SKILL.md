@@ -1,45 +1,45 @@
 ---
 name: ship-it
-description: End-to-end PRD orchestrator. Takes a PRD file path or GitHub issue URL/number, breaks it into a dependency-ordered task DAG, creates GitHub issues with labels and milestone, then implements tasks one at a time on branches in the main repo using strict TDD. Interactive user approval after each task (merge or re-fix). Unlocks dependent tasks as tasks merge. Produces a live markdown dashboard. Supports --dry-run to render the ASCII DAG without executing. Use when user says "ship it", "ship this PRD", "run ship-it", or invokes /ship-it.
+description: End-to-end PRD orchestrator. Takes a PRD file path or GitHub issue URL/number, breaks it into a dependency-ordered task DAG, creates GitHub issues with labels and milestone, then spawns parallel TDD agent swarms in isolated git worktrees — one per ready task. Each agent implements strict RED-GREEN-REFACTOR TDD, opens a PR quoting the PRD section, links to the parent issue. Monitors CI (re-invokes fix agents on failure), polls PR review comments every N minutes and addresses them with follow-up commits. Unlocks dependent tasks as PRs merge. Produces a live markdown dashboard. Supports --dry-run to render the ASCII DAG without executing. Use when user says "ship it", "ship this PRD", "run ship-it", or invokes /ship-it.
 model: opus
-argument-hint: "--prd <file|url|number> (--dry-run) (--max-iter <n>)"
+argument-hint: "--prd <file|url|number> (--dry-run) (--poll <minutes>) (--max-iter <n>)"
 ---
 
-# Ship-It Orchestrator
+# Ship-It-Worktree Orchestrator
 
-Autonomously ship a PRD: DAG decomposition → GitHub issues → sequential TDD implementation → interactive merge → confirmed delivery.
+Autonomously ship a PRD: DAG decomposition → GitHub issues → parallel TDD swarms → CI monitoring → PR review handling → merged PRs.
 
 ---
 
 ## Usage
 
 ```
-/ship-it --prd <file-or-issue-url-or-number> [--dry-run] [--max-iter <n>]
+/ship-it --prd <file-or-issue-url-or-number> [--dry-run] [--poll <minutes>] [--max-iter <n>]
 ```
 
 - `--prd` — local Markdown file path, GitHub issue URL, or issue number
 - `--dry-run` — render the ASCII DAG and stop; create nothing
+- `--poll` — CI/review polling interval in minutes (default: 5)
 - `--max-iter` — max TDD iterations per task agent (default: 10)
 
 ---
 
 ## Session state (JSON sidecar)
 
-All orchestrator state lives in `./ship-it-<PRD_SLUG>.json`. The Markdown dashboard is derived from it. Re-read before each write.
+All orchestrator state lives in `./ship-it-<PRD_SLUG>.json`. The Markdown dashboard is derived from it. Re-read before each write to handle near-simultaneous agent completions.
 
-Task status values (in order): `pending → in-progress → pending-review → done | failed | skipped`
+Task status values (in order): `pending → in-progress → pr-open → ci-pass → done | failed | skipped`
 
 ```json
 {
-  "version": 2,
+  "version": 1,
   "prdSlug": "invoice-mgmt-v2",
   "prdTitle": "...",
   "prdSource": "#42 or ./docs/prd.md",
   "milestoneNumber": 7,
   "baseBranch": "feat/my-feature",
   "repoRoot": "/abs/path",
-  "testCmd": "pnpm test:run",
-  "markerPrefix": "// ship-it:#",
+  "pollMinutes": 5,
   "maxIter": 10,
   "startedAt": "ISO-8601",
   "coverageMap": { "REQ-1": [1, 3], "REQ-2": [] },
@@ -53,15 +53,17 @@ Task status values (in order): `pending → in-progress → pending-review → d
     "issueNumber": 101,
     "blockedBy": [],
     "blockedByIssues": [],
+    "worktreePath": null,
     "branch": null,
-    "commitHash": null,
-    "testFilePath": null,
-    "rootCause": null,
-    "fixSummary": null,
-    "refixCount": 0,
+    "prUrl": null,
+    "prNumber": null,
+    "ciStatus": null,
+    "reviewStatus": null,
     "mergedAt": null,
     "failureReason": null,
     "hitlResolution": null,
+    "ciFixAttempts": 0,
+    "reviewFixAttempts": 0,
     "notes": "",
     "uiInvolved": false,
     "uiBlock": null,
@@ -72,54 +74,11 @@ Task status values (in order): `pending → in-progress → pending-review → d
 
 ---
 
-## Session start prechecks
-
-Run before accepting any user interaction. Hard-fail with a clear message if any check fails:
-
-```bash
-# 1. Inside a git repo with at least one commit
-git rev-parse --show-toplevel >/dev/null 2>&1 || abort "Not a git repo."
-git rev-parse HEAD             >/dev/null 2>&1 || abort "Repo has no commits."
-
-# 2. On a named branch (not detached HEAD)
-BASE_BRANCH=$(git rev-parse --abbrev-ref HEAD)
-[ "$BASE_BRANCH" != "HEAD" ] || abort "Detached HEAD — checkout a branch first."
-
-# 3. Clean working tree — agents commit directly in this repo; WIP would interleave.
-[ -z "$(git status --porcelain)" ] || abort "Uncommitted changes in $BASE_BRANCH — commit or stash before ship-it."
-```
-
-Store `BASE_BRANCH` and `REPO_ROOT=$(git rev-parse --show-toplevel)` in context.
-
-### Detect test runner
-
-Probe for `TEST_CMD` once at session start:
-
-1. If `package.json` has script `test:run` → `TEST_CMD="pnpm test:run"`
-2. Else if `package.json` has script `test`        → `TEST_CMD="pnpm test"`
-3. Else if `pyproject.toml` or `pytest.ini`        → `TEST_CMD="pytest"`
-4. Else if `Cargo.toml`                            → `TEST_CMD="cargo test"`
-5. Else → ask user: *"What command runs your tests?"* — store their answer.
-
-Store `TEST_CMD` in context. Written to sidecar (`testCmd`) in Phase 3a.
-
-### Detect test marker syntax
-
-The TDD marker (default `// ship-it:#<id>`) must be a comment in the project's language:
-
-- JS / TS / Java / Rust / Go / C-family → `// ship-it:#<id>`
-- Python / Ruby / Shell                  → `# ship-it:#<id>`
-- Other → ask user.
-
-Store as `MARKER_PREFIX` in context. Written to sidecar (`markerPrefix`) in Phase 3a.
-
----
-
 ## Phase 0 — Parse arguments and ingest PRD
 
-Extract `--prd`, `--dry-run`, `--max-iter` (default 10).
+Extract `--prd`, `--dry-run`, `--poll` (default 5), `--max-iter` (default 10).
 
-Capture the current branch as the base branch for all merges:
+Capture the current branch as the base branch for all PRs:
 ```bash
 BASE_BRANCH=$(git branch --show-current)
 ```
@@ -153,9 +112,9 @@ Ship-it adds the following per-task fields beyond what prd-to-issues produces:
 
 ```
 id:                 integer (1-indexed)
-title:              kebab slug (for branch names)
+title:              kebab slug (for branch/worktree names)
 displayTitle:       short human title
-prdSection:         verbatim PRD paragraph(s) this task maps to (quoted in agent context)
+prdSection:         verbatim PRD paragraph(s) this task maps to (used in PR body)
 uiBlock:            prdUiBlock when uiInvolved == true AND prdUiBlock != null, else null
 uiMockupUrl:        prdMockupUrl when uiInvolved == true AND prdUiBlock == null AND prdMockupUrl != null, else null (legacy)
 ```
@@ -164,7 +123,7 @@ After §4 user approval, compute **execution waves**:
 
 - Wave 0: `blockedBy = []`
 - Wave N: every blocker is in waves 0..N-1
-- Same wave = `parallel` label (same DAG level); alone in wave = `serial` label.
+- Same wave = `parallel` label; alone in wave = `serial` label.
 
 Store `coverageMap` and `supplementalDag` (`null | "screen" | "process"` plus nodes/edges) in the JSON sidecar.
 
@@ -248,12 +207,12 @@ Then print: `Dry run complete. N tasks across M waves. Invoke without --dry-run 
 
 ```bash
 gh label create "ship-it"          --color 7C3AED --description "Managed by ship-it" 2>/dev/null || true
-gh label create "parallel"         --color 0EA5E9 --description "Same wave in DAG"   2>/dev/null || true
-gh label create "serial"           --color F97316 --description "Alone in wave"       2>/dev/null || true
+gh label create "parallel"         --color 0EA5E9 --description "Runs in parallel"   2>/dev/null || true
+gh label create "serial"           --color F97316 --description "Runs serially"       2>/dev/null || true
 gh label create "HITL"             --color F59E0B --description "Requires human"      2>/dev/null || true
 gh label create "status:pending"   --color 94A3B8 --description "Not yet started"    2>/dev/null || true
 gh label create "status:in-progress" --color 3B82F6 --description "Agent working"   2>/dev/null || true
-gh label create "status:done"      --color 22C55E --description "Merged and confirmed" 2>/dev/null || true
+gh label create "status:done"      --color 22C55E --description "PR merged"          2>/dev/null || true
 gh label create "status:failed"    --color EF4444 --description "Agent failed"        2>/dev/null || true
 gh label create "NEEDS-HUMAN"      --color FF0000 --description "Manual intervention" 2>/dev/null || true
 ```
@@ -354,33 +313,33 @@ Record the real GitHub issue number for each task. Update `blockedByIssues` in t
 
 ### 3a. Write JSON sidecar
 
-Write `./ship-it-<PRD_SLUG>.json` with all task data (see §session-state schema above). Include `testCmd` and `markerPrefix` from session prechecks.
+Write `./ship-it-<PRD_SLUG>.json` with all task data (see §session-state schema above).
 
 ### 3b. Write Markdown dashboard
 
 Write `./ship-it-<PRD_SLUG>.md`:
 
 ```markdown
-# Ship-It: <PRD_TITLE>
+# Ship-It-Worktree: <PRD_TITLE>
 
-> Source: <PRD_SOURCE> | Milestone: #<MILESTONE_NUMBER> | Started: <timestamp>
+> Source: <PRD_SOURCE> | Milestone: #<MILESTONE_NUMBER> | Started: <timestamp> | Poll: <POLL>min
 
 ## Status
 
-| # | Title | Type | Wave | Status | Branch | Commit | Notes |
-|---|-------|------|------|--------|--------|--------|-------|
-| 1 | <displayTitle> | AFK | 0 | pending | — | — | — |
+| # | Title | Type | Wave | Status | Worktree | PR | CI | Notes |
+|---|-------|------|------|--------|----------|----|----|-------|
+| 1 | <displayTitle> | AFK | 0 | pending | — | — | — | — |
 ```
 
-Update this file by re-rendering from JSON after every status change.
+Update this file by re-rendering from JSON at each polling cycle and after every status change.
 
 ---
 
-## Phase 4 — HITL gate (runs when a HITL task is selected by the queue drain)
+## Phase 4 — HITL gate (runs before each wave)
 
-When the queue drain (Phase 5b) picks a HITL task, use `AskUserQuestion` before spawning the agent:
+For every HITL task that is about to become ready, use `AskUserQuestion` before spawning agents:
 
-**Question:** "Task #<issueNumber> (<displayTitle>) is HITL and is now ready. How do you want to proceed?"
+**Question:** "Task #<issueNumber> (<displayTitle>) is HITL and is now unblocked. How do you want to proceed?"
 
 **Options:**
 1. Proceed — run the agent now (I trust it to decide)
@@ -395,225 +354,57 @@ gh issue comment <issueNumber> --body "## HITL guidance from user
 ```
 Then treat the task as AFK for spawning purposes.
 
-For option 3: update task `status = skipped`, update label, update dashboard. Invoke queue-drain (Phase 5b) again.
+For option 3: update task `status = skipped`, update label, update dashboard. Do not spawn an agent.
 
 ---
 
-## Phase 5 — Sequential execution
+## Phase 5 — Parallel execution
 
-The orchestrator processes tasks one at a time. At most one task occupies the active slot (`status` in `{in-progress, pending-review}`) at any moment.
+### 5a. Identify ready tasks
 
-### 5a. Active slot invariant
+Ready = `status: pending` AND all tasks in `blockedBy` have `status: done`.
 
-Before picking the next task, assert no task has `status` in `{in-progress, pending-review}`. If one does, wait for its agent to complete (notifications route to §coordinator).
+On first run this is Wave 0.
 
-### 5b. Pick next task (queue-drain)
+### 5b. Run HITL gate for any HITL tasks in ready set (§Phase 4)
 
-Select from `status: pending` tasks where **all** `blockedBy` IDs have `status: done`:
-- Among those: pick lowest `wave` first, then lowest `id` within that wave (topological FIFO).
-- If no task is ready AND all tasks are in terminal states (`done`, `failed`, `skipped`) → Phase 7.
-- If no task is ready AND non-terminal tasks remain (some `pending` tasks whose blockers are `failed` or `skipped` — permanently blocked): explicitly mark each such task `status = failed`, `failureReason = "Permanently blocked — blocker #<blockerId> (<blockerTitle>) failed/was skipped"`. Update JSON, labels, dashboard for each. Then → Phase 7.
+### 5c. Create worktrees — SEQUENTIAL (one at a time, no parallelism here)
 
-### 5c. HITL gate
-
-If the picked task has `type == "HITL"`, run Phase 4 now. Phase 4 may skip the task (→ drain again from 5b) or proceed (→ treat as AFK).
-
-### 5d. Create branch in main repo
-
+Identify repo root first:
 ```bash
-# Refuse if working tree picked up dirt (e.g. previous rebase left state)
-[ -z "$(git -C "$REPO_ROOT" status --porcelain)" ] || abort "Working tree dirty in $BASE_BRANCH — resolve before starting next task."
-
-git -C "$REPO_ROOT" checkout "$BASE_BRANCH"
-
-# Build branch slug; cap at 50 chars; resolve collisions
-SLUG="<PRD_SLUG>-$(echo "<task-title>" | tr '[:upper:]' '[:lower:]' | tr -cs 'a-z0-9' '-' | sed 's/^-//;s/-$//' | cut -c1-40)"
-
-i=2
-while git -C "$REPO_ROOT" show-ref --quiet "refs/heads/${SLUG}"; do
-  SLUG="${SLUG%-[0-9]*}-$i"; i=$((i+1))
-done
-
-git -C "$REPO_ROOT" checkout -b "$SLUG"
+REPO_ROOT=$(git rev-parse --show-toplevel)
 ```
 
-Store `branch = $SLUG` in JSON. If the branch already exists and HEAD is already on it (resume case), skip `checkout -b` but do run `git checkout <branch>` to ensure HEAD is correct.
-
-### 5e. Launch task agent
-
-Spawn one Agent (`run_in_background: true`, `subagent_type: general-purpose`) using §task-agent-prompt. Fill in task-specific values. Set `status = in-progress`, update GitHub issue label (`status:in-progress`), write JSON, write dashboard.
-
-Wait for this agent to complete. When the notification arrives → §coordinator.
-
-### 5f. Stuck agent detection
-
-If no notification arrives within 30 minutes of spawning: use `TaskList` to check. For any agent in `running` state past 30 min, call `TaskStop`. Mark its task `status = failed`, `failureReason = "Agent timed out after 30 minutes"`. Update JSON, label, dashboard. Invoke queue-drain (Phase 5b).
-
----
-
-## §coordinator — processing agent results
-
-> **Invariant.** Every transition to `done` or `failed` — anywhere in this spec, including all failure sites in §merge-flow — MUST invoke the queue-drain (Phase 5b) before yielding control. This is the only mechanism that starts the next task.
-
-### TDD enforcement check
-
-Before accepting any `TASK_COMPLETE`, confirm the marker exists in the branch diff vs `BASE_BRANCH`:
-
+For each ready AFK task:
 ```bash
-git -C "$REPO_ROOT" diff "$BASE_BRANCH"...<branch> -- '**/*test*' '**/*spec*' '**/__tests__/**' \
-  | grep -E "<MARKER_PREFIX>#<issueNumber>\b"
+SLUG="<PRD_SLUG>-<task-title-kebab>"
+WORKTREE_PATH="$HOME/workspace/$SLUG"
+git -C "$REPO_ROOT" worktree add "$WORKTREE_PATH" -b "$SLUG"
 ```
 
-The `\b` word boundary prevents `ship-it:#1` from matching `ship-it:#10`.
+Store `worktreePath` and `branch` in JSON. Skip `git worktree add` if path already exists (resume case).
 
-If missing → treat as `TASK_FAILED: TDD_SKIPPED — no ship-it marker in test diff`.
+### 5d. Launch ALL ready AFK task agents in ONE message (true parallel)
 
-### Parse agent result
+**Critical:** Every `Agent` call for the current ready set must appear in a single response. Use multiple Agent tool calls with `run_in_background: true` and `subagent_type: general-purpose`.
 
-- `TASK_COMPLETE: <hash> TEST:<testFilePath> ROOT_CAUSE:<rootCause> FIX_SUMMARY:<fixSummary>` (marker confirmed):
-  - Set `status = pending-review`, store `commitHash`, `testFilePath`, `rootCause`, `fixSummary`
-  - Update JSON (re-read first), update dashboard, update GitHub issue label (`status:pending-review`)
-  - Call `AskUserQuestion`:
-    ```
-    question: "#<issueNumber> `<displayTitle>` ready.\n\nRoot cause: <rootCause>\nFix: <fixSummary>\n\nMerge into `<baseBranch>`?"
-    header:   "Merge #<issueNumber>"
-    options:
-      - label: "Merge"   description: "Rebase + fast-forward merge, then confirm manually"
-      - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
-    ```
-  - If "Merge" → run **§merge-flow**
-  - If "Re-fix" / Any typed feedback → run **§re-fix** with that text as user feedback
+Do NOT launch one, wait, then launch another.
 
-- `TASK_FAILED: TDD_SKIPPED — <reason>` → `status = failed`, `failureReason = "TDD skipped: <reason>"`. Hard fail, never retry. Update JSON, dashboard, label. Invoke queue-drain (Phase 5b).
+Update each launched task: `status = in-progress`, update GitHub label, update JSON, update dashboard.
 
-- `TASK_FAILED: <reason>` → `status = failed`, `failureReason = reason`. Update JSON, dashboard, label. Invoke queue-drain (Phase 5b).
-
-- Malformed output (no recognized final-report line) → treat as `TASK_FAILED: agent produced no final report`.
-
-**After every parse, in this exact order — no skipping:**
-1. Re-read JSON sidecar from disk
-2. Apply status change to in-memory state
-3. Write updated JSON sidecar to disk
-4. Update GitHub issue label
-5. Re-render and write Markdown dashboard
-
----
-
-## §merge-flow — merge + post-merge confirmation
-
-Called from §coordinator when user picks "Merge" on a `pending-review` task.
-
-**Step 1 — Rebase onto `BASE_BRANCH`:**
-
-The task branch is already checked out (orchestrator did `git checkout -b` before spawning the agent).
-
-```bash
-cd "$REPO_ROOT"
-git rebase "$BASE_BRANCH"
-```
-
-On any conflict:
-```bash
-git rebase --abort
-```
-→ `status = failed`, `failureReason = "Rebase conflict — manual resolution required"`. Update JSON, dashboard, label. Invoke queue-drain (Phase 5b). Keep branch for manual recovery.
-
-After successful rebase, run the full test suite:
-```bash
-cd "$REPO_ROOT" && <TEST_CMD>
-```
-If it fails → `status = failed`, `failureReason = "Regression after rebase"`. Update JSON, dashboard, label. Invoke queue-drain (Phase 5b). Keep branch for manual recovery.
-
-**Step 2 — Fast-forward merge:**
-
-```bash
-git -C "$REPO_ROOT" checkout "$BASE_BRANCH"
-git -C "$REPO_ROOT" merge --ff-only "<branch>"
-```
-
-If ff-only fails (base advanced externally):
-→ `status = failed`, `failureReason = "Fast-forward merge failed — base branch advanced; re-run ship-it to rebase"`. Update JSON, dashboard, label. Keep branch for manual recovery. Invoke queue-drain (Phase 5b).
-
-**Step 3 — Post-merge confirmation (branch kept until user confirms):**
-
-Call `AskUserQuestion`:
-
-```
-question: "#<issueNumber> `<displayTitle>` merged into `<baseBranch>`. Test manually. Fixed?"
-header:   "Confirm #<issueNumber>"
-options:
-  - label: "Confirmed"    description: "Close issue, delete branch, unlock dependents"
-  - label: "Still broken" description: "Describe what's wrong — re-fix on new branch, then merge again"
-```
-
-Typed free-form text → treat as "Still broken" with that text as user feedback.
-
-**If "Confirmed":**
-1. `status = done`, record `mergedAt` in JSON
-2. Update GitHub issue label: `status:done`
-3. Close GitHub issue:
-   ```bash
-   gh issue close <issueNumber> --comment "Shipped via direct merge into <baseBranch> (commit <commitHash[:8]>)."
-   ```
-4. Delete branch:
-   ```bash
-   git -C "$REPO_ROOT" branch -d <branch> 2>/dev/null || true
-   ```
-5. Re-read JSON, write updated JSON, re-render dashboard
-6. **DAG unlock:** find tasks where `status = pending` AND all `blockedBy` IDs now have `status = done`. Print: `Unlocked: [#<id> <displayTitle>, ...]`. Update JSON.
-7. Invoke queue-drain (Phase 5b)
-
-**If "Still broken" / typed feedback:**
-- `status = in-progress` (re-opens the active slot)
-- Increment `refixCount` in JSON
-- Run §re-fix with user's feedback. When agent completes → back to §coordinator → AskUserQuestion → §merge-flow.
-
-Note: The "Still broken" path does NOT close the GitHub issue, does NOT perform DAG unlock, and does NOT delete the branch (a new branch is created for the re-fix instead — the old merged branch is already gone from Step 2's checkout, which switched to BASE_BRANCH, but the branch ref still exists locally until deleted). Actually, after Step 2's `git checkout "$BASE_BRANCH"`, the task branch ref still exists. Do not delete it on the "Still broken" path — §re-fix will use BASE_BRANCH (which now contains the broken code) as the starting point for the new fix branch.
-
----
-
-## §re-fix — re-fix flow (per task, ongoing)
-
-When user is not satisfied with a completed task — either at the coordinator's AskUserQuestion or at Step 3 post-merge confirmation.
-
-1. `status = in-progress`
-2. Increment `refixCount` (already done in §merge-flow "Still broken" path; if called from coordinator pre-merge, increment here)
-3. Create new branch from `BASE_BRANCH`:
-   ```bash
-   NEW_BRANCH="<original-branch>-r<refixCount>"
-   git -C "$REPO_ROOT" checkout "$BASE_BRANCH"
-   git -C "$REPO_ROOT" checkout -b "$NEW_BRANCH"
-   ```
-   Store updated `branch = NEW_BRANCH` in JSON.
-4. Spawn new task agent (`run_in_background: true`, `subagent_type: general-purpose`) using §task-agent-prompt with `WORK_DIR = $REPO_ROOT`, plus RE-FIX NOTE prepended before the TDD LOOP:
-
-```
-RE-FIX NOTE: A previous implementation was committed and merged into <baseBranch>, but
-the user reports it is still broken.
-
-User feedback: <user's description of remaining problem>
-
-TDD invariant for re-fix:
-- The user feedback describes a NEW failing scenario the previous fix did not cover.
-- Write a NEW failing test for that scenario. It must genuinely fail (RED) against
-  current code on this branch. Place <MARKER_PREFIX>#<issueNumber> immediately above it.
-- Then GREEN, REFACTOR. Commit normally. Final report uses the same TASK_COMPLETE format.
-- If the user feedback is vague, ask for one concrete reproduction step before writing code.
-```
-
-5. When agent completes → §coordinator (same flow: merge prompt → §merge-flow → confirmation).
+Use §task-agent-prompt for each agent, filling in the task-specific values.
 
 ---
 
 ## §task-agent-prompt
 
 ```
-You are a ship-it task agent. Implement one GitHub issue using strict TDD.
+You are a ship-it task agent. Implement one GitHub issue using strict TDD, then open a PR.
 
 ═══════════════════════════════════════════════════════════════
 TASK CONTEXT
 ═══════════════════════════════════════════════════════════════
-WORK DIR      : <repoRoot>    ← branch already checked out by orchestrator
+WORKTREE DIR  : <worktreePath>
 REPO ROOT     : <repoRoot>
 BRANCH        : <branch>
 BASE BRANCH   : <baseBranch>
@@ -627,7 +418,7 @@ MAX ITERATIONS: <maxIter>
   gh issue view <issueNumber> --json title,body
 
 ── STEP 1: EXPLORE ─────────────────────────────────────────────
-Explore the codebase inside <repoRoot>:
+Explore the codebase in <worktreePath>:
   - Existing tests (*.test.*, *.spec.*, __tests__/)
   - Test runner command (look in package.json, Makefile, Cargo.toml, etc.)
   - Existing modules this slice touches
@@ -644,7 +435,7 @@ Note the test runner command. Use it exactly in subsequent steps.
      Each row gives: error string, i18n key, EN message, VI message. Go to step (c).
 
   b) If the table is absent or empty: scan backend route files for each endpoint this task calls.
-     Pattern: grep -rn "res\.status.*\.json.*error" <repoRoot>/backend/src/
+     Pattern: grep -rn "res\.status.*\.json.*error" <worktreePath>/backend/src/
      Collect every distinct { statusCode, errorString } pair for touched endpoints.
      Derive i18n key as camelCase from the error string, nested under the feature's existing
      i18n section. Use friendly messages from the PRD's ## Implementation Decisions, or
@@ -682,30 +473,30 @@ Write ONE failing test describing the expected behavior.
   - Test must describe BEHAVIOR, not implementation details
   - Test would survive an internal refactor while behavior is unchanged
   - Add this marker on the line IMMEDIATELY ABOVE the test() / it() / #[test] call:
-      <MARKER_PREFIX>#<issueNumber>
+      // ship-it:#<issueNumber>
 
   Run the test to confirm it FAILS:
-    cd <repoRoot> && <test-runner> <test-file>
+    cd <worktreePath> && <test-runner> <test-file>
 
   ▶ If the test PASSES before your fix: you wrote the wrong test. Rewrite until it fails.
   ▶ If you CANNOT write a meaningful failing test for this criterion:
       Output: TASK_FAILED: TDD_SKIPPED — <one-sentence reason>
-      STOP immediately. Do not attempt a partial fix.
+      STOP immediately. Do not attempt a partial fix. Do not open a PR.
 
 ── GREEN ─────────────────────────────────────────────────────────
 Write MINIMAL code to make the failing test pass.
 
   Run targeted test:
-    cd <repoRoot> && <test-runner> <test-file>
+    cd <worktreePath> && <test-runner> <test-file>
   Confirm new test passes.
 
   Run full suite to check for regressions:
-    cd <repoRoot> && <test-runner>
+    cd <worktreePath> && <test-runner>
 
   ▶ If full suite fails due to your change: revert your code, try a different approach.
   ▶ If you cannot make it pass without regressions after 3 attempts:
       Output: TASK_FAILED: regression introduced by <criterion> — <file:line>
-      STOP.
+      STOP. Do not open a PR.
 
 ── Continue until all acceptance criteria have passing tests ──────
 
@@ -722,7 +513,7 @@ error string from §api-error-coverage:
 
   RED: Mock the API to return { status: N, data: { error: 'errorString' } }.
        Assert the component displays the text resolved by t('i18nKey').
-       Mark with <MARKER_PREFIX>#<issueNumber> immediately above the test() call.
+       Mark with // ship-it:#<issueNumber> immediately above the test() call.
        Confirm it FAILS before the catch handler is wired.
        ▶ If it already passes: mapping was accidentally covered — log it and skip.
 
@@ -736,38 +527,256 @@ COMMIT
 ═══════════════════════════════════════════════════════════════
 Stage ONLY the files you changed. NEVER use git add . or git add -A:
 
-  cd <repoRoot>
+  cd <worktreePath>
   git add <file1> <file2> ...
   git commit -m "feat(<scope>): <displayTitle>
 
-  Implements #<issueNumber>
+  Closes #<issueNumber>
 
   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
 
 ═══════════════════════════════════════════════════════════════
-DONE — DO NOT PUSH
+PUSH AND OPEN PR
 ═══════════════════════════════════════════════════════════════
-Do NOT push to remote. Do NOT open a PR.
-The orchestrator handles merging your branch into <baseBranch>.
+  cd <worktreePath>
+  git push -u origin <branch>
+
+  gh pr create \
+    --title "feat: <displayTitle>" \
+    --base <baseBranch> \
+    --head <branch> \
+    --milestone <milestoneNumber> \
+    --body "$(cat <<'PRBODY'
+## Parent PRD
+
+> <prdSection — verbatim quote of the PRD paragraph this task maps to>
+
+Closes #<issueNumber>
+
+## What was built
+
+<one paragraph describing what was implemented>
+
+## TDD evidence
+
+All acceptance criteria have tests marked `// ship-it:#<issueNumber>`.
+Run: `<test-runner>`
+
+## Checklist
+
+- [x] RED test written before implementation
+- [x] GREEN — all tests pass
+- [x] REFACTOR — no speculative changes
+- [x] Full test suite passes with no regressions
+- [x] Linked to milestone #<milestoneNumber>
+
+🤖 Generated with [Claude Code](https://claude.com/claude-code)
+PRBODY
+)"
 
 ═══════════════════════════════════════════════════════════════
 FINAL REPORT — your LAST output must be EXACTLY one of these
 ═══════════════════════════════════════════════════════════════
-  TASK_COMPLETE: <full 40-character commit hash> TEST:<path/to/test/file> ROOT_CAUSE:<one sentence naming the defective code or missing feature> FIX_SUMMARY:<one sentence naming the change made>
+  TASK_COMPLETE: <full-pr-url>
   TASK_FAILED: <one-sentence reason>
   TASK_FAILED: TDD_SKIPPED — <one-sentence reason>
 
 ═══════════════════════════════════════════════════════════════
 RULES
 ═══════════════════════════════════════════════════════════════
-- All work happens in <repoRoot> on branch <branch>. Do not switch branches.
+- All work happens in <worktreePath>. NEVER touch the main repo working tree.
 - RED must fail before GREEN. No exceptions.
 - TDD_SKIPPED is a hard failure. Never attempt a partial fix.
 - NEVER use git add . or git add -A
-- Never push to remote. The orchestrator merges your work.
-- The <MARKER_PREFIX>#N marker is MANDATORY above every new test.
+- Do not push before all tests are green.
+- The // ship-it:#N marker is MANDATORY above every new test.
+- Do not open a PR if TASK_FAILED.
 - No speculative code, no future-proofing, no abstractions beyond the current criterion.
 ```
+
+---
+
+## Phase 6 — Process completions and poll CI/reviews
+
+You will be notified when each background agent completes. Process them as they arrive.
+
+### 6a. Parse agent result
+
+Read the last line of the agent's output:
+
+- `TASK_COMPLETE: <pr-url>` → validate marker (§6b), then `status = pr-open`, store `prUrl`
+- `TASK_FAILED: TDD_SKIPPED — <reason>` → `status = failed`, `failureReason = reason`. **No retry.** If `worktreePath` is set, remove it:
+  ```bash
+  git -C "$REPO_ROOT" worktree remove <worktreePath> --force 2>/dev/null || true
+  git -C "$REPO_ROOT" worktree prune
+  ```
+  Set `worktreePath = null` in JSON.
+- `TASK_FAILED: <reason>` → `status = failed`, `failureReason = reason`. If `worktreePath` is set, remove it (same commands as above). Set `worktreePath = null` in JSON. Log for final summary.
+
+**After every parse, in this exact order — no skipping:**
+1. Re-read JSON sidecar from disk
+2. Apply status change to in-memory state
+3. Write updated JSON sidecar to disk
+4. Update GitHub issue label
+5. Re-render and write Markdown dashboard from the updated JSON — **this step is mandatory, never skip it**
+
+### 6b. Validate TDD marker (before accepting TASK_COMPLETE)
+
+```bash
+git -C <worktreePath> show HEAD | grep "ship-it:#<issueNumber>"
+```
+
+If marker is missing and agent reported `TASK_COMPLETE` → treat as `TASK_FAILED: TDD_SKIPPED — no ship-it marker in commit`.
+
+### 6c. CI polling loop (every POLL minutes, for each `pr-open` task)
+
+```bash
+gh pr checks <prUrl> --json name,state,conclusion
+```
+
+- All `conclusion = success` → `status = ci-pass`; proceed to §6e (merge + unlock)
+- Any `conclusion = failure` → extract logs (§ci-fix), spawn fix agent
+- Still pending → wait for next poll
+
+### 6d. PR review polling (every POLL minutes, for each `pr-open` or `ci-pass` task)
+
+```bash
+gh pr view <prUrl> --json reviews,comments,reviewDecision
+```
+
+- `reviewDecision = APPROVED` and `ciStatus = pass` → merge (§6e)
+- `reviewDecision = CHANGES_REQUESTED` or unresolved comments → spawn review-fix agent (§review-fix)
+- `reviewDecision = REVIEW_REQUIRED` with no feedback → keep polling
+
+Update dashboard after each poll cycle even if nothing changed (to show current timestamp).
+
+### 6e. Merge + unlock (CI pass, review approved or not required)
+
+```bash
+gh pr merge <prUrl> --squash --auto --delete-branch
+```
+
+After merge:
+1. `status = done`, record `mergedAt` in JSON
+2. Update GitHub issue label: `status:done`
+3. Explicitly close the slice issue (GitHub only auto-closes on default branch merges):
+   ```bash
+   gh issue close <issueNumber> --comment "Shipped via <prUrl> → merged into <baseBranch>."
+   ```
+4. Remove worktree:
+   ```bash
+   git -C "$REPO_ROOT" worktree remove <worktreePath> --force
+   git -C "$REPO_ROOT" worktree prune
+   ```
+5. Update JSON and dashboard
+6. Check for newly unblocked tasks: tasks where `status = pending` AND all `blockedBy` tasks are `done`
+7. If newly unblocked tasks exist → run HITL gate if needed → create worktrees → **launch all in ONE message** (§Phase 5)
+
+---
+
+## §ci-fix — CI failure agent
+
+When CI fails on a PR, extract logs:
+
+```bash
+RUN_ID=$(gh run list --branch <branch> --json databaseId,conclusion --jq 'map(select(.conclusion=="failure"))[0].databaseId')
+gh run view "$RUN_ID" --log-failed
+```
+
+Increment `ciFixAttempts` in JSON. If `ciFixAttempts > 3`: mark task `failed`, `failureReason = "CI fix exhausted after 3 attempts"`. Remove worktree:
+```bash
+git -C "$REPO_ROOT" worktree remove <worktreePath> --force 2>/dev/null || true
+git -C "$REPO_ROOT" worktree prune
+```
+Set `worktreePath = null` in JSON. Skip spawning another fix agent.
+
+Otherwise, spawn a `general-purpose` Agent with `run_in_background: true`:
+
+```
+You are a CI fix agent. Fix failing tests/build in this worktree.
+
+WORKTREE : <worktreePath>
+BRANCH   : <branch>
+PR       : <prUrl>
+
+CI FAILURE LOGS:
+<paste full gh run view --log-failed output>
+
+STEPS:
+1. Read the failure logs carefully — identify root cause
+2. Fix the failing code (minimal change only)
+3. Run the full test suite locally to confirm green:
+   cd <worktreePath> && <test-runner>
+4. Stage specific files and commit:
+   cd <worktreePath>
+   git add <files>
+   git commit -m "fix: resolve CI failure
+
+   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+5. Push:
+   cd <worktreePath> && git push
+
+FINAL REPORT (last line, exactly):
+  CI_FIXED: <commit-hash>
+  CI_FAILED: <one-sentence reason>
+```
+
+After completion:
+- `CI_FIXED` → update `notes` in JSON with fix summary, resume CI polling
+- `CI_FAILED` → `status = failed`, `failureReason = reason`
+
+---
+
+## §review-fix — PR review comment agent
+
+When PR has unresolved change requests:
+
+```bash
+gh pr view <prUrl> --json reviews,comments \
+  --jq '[.reviews[] | select(.state == "CHANGES_REQUESTED")] + .comments'
+```
+
+Increment `reviewFixAttempts`. If `reviewFixAttempts > 3`: surface to user via `AskUserQuestion`.
+
+Spawn a `general-purpose` Agent with `run_in_background: true`:
+
+```
+You are a review-fix agent. Address PR review comments.
+
+WORKTREE : <worktreePath>
+BRANCH   : <branch>
+PR       : <prUrl>
+
+REVIEW COMMENTS (JSON):
+<paste gh pr view --json reviews,comments output>
+
+STEPS:
+1. Read each review comment carefully
+2. For each actionable comment: make the minimal change requested
+3. Run full test suite to confirm still green:
+   cd <worktreePath> && <test-runner>
+4. Stage specific files and commit:
+   cd <worktreePath>
+   git add <files>
+   git commit -m "review: address PR feedback
+
+   Co-Authored-By: Claude Sonnet 4.6 <noreply@anthropic.com>"
+5. Push: cd <worktreePath> && git push
+
+If a comment requires a design decision you cannot make alone:
+  Output: REVIEW_BLOCKED: <description of decision needed>
+  STOP.
+
+FINAL REPORT (last line, exactly):
+  REVIEW_ADDRESSED: <commit-hash>
+  REVIEW_BLOCKED: <decision description>
+  REVIEW_FAILED: <reason>
+```
+
+After completion:
+- `REVIEW_ADDRESSED` → update notes, resume review polling
+- `REVIEW_BLOCKED` → use `AskUserQuestion` to surface to user, await guidance, re-spawn
+- `REVIEW_FAILED` → log warning, keep polling (retry next cycle)
 
 ---
 
@@ -785,7 +794,7 @@ Write an integration test that exercises the new schema feature through the publ
 - New table / relation → test creating and querying a record via the new relation
 
 Run the test against the current DB (migration not yet applied). It MUST fail.
-Mark with `<MARKER_PREFIX>#<issueNumber>` on the line immediately above.
+Mark with `// ship-it:#<issueNumber>` on the line immediately above.
 
 ▶ If the test passes before migration: wrong test — rewrite until it fails.
 ▶ If no meaningful behavioral test is possible (e.g., pure performance index with no correctness impact): write a schema-inspection test querying `information_schema.columns` / `pg_indexes`. This still counts as RED — it fails because the column/index doesn't exist yet.
@@ -819,19 +828,21 @@ Resume this session?
 Use `AskUserQuestion` with options: Resume / Start fresh.
 
 On resume:
-- Load JSON state. Restore `TEST_CMD` and `MARKER_PREFIX` from `testCmd` and `markerPrefix` fields.
-- **Handle `in-progress` tasks:**
-  - Branch exists AND has commits beyond `BASE_BRANCH`: mark `status = failed`, `failureReason = "Agent crashed or timed out — inspect branch <branch> manually"`. Keep branch for manual recovery.
-  - Branch exists but has NO commits beyond `BASE_BRANCH` (agent crashed before writing code): mark `status = failed`, `failureReason = "Agent crashed before producing code — branch empty"`. Delete branch: `git -C "$REPO_ROOT" branch -D <branch> 2>/dev/null || true`.
-  - Branch does NOT exist: mark `status = failed`, `failureReason = "Agent crashed — branch was never created or was deleted"`.
-  - In all three cases: update JSON, label, dashboard.
-- **Handle `pending-review` tasks:**
-  - Re-read `rootCause` and `fixSummary` from JSON. If non-null: re-present `AskUserQuestion` from §coordinator (merge or re-fix) without re-running the agent.
-  - If null (orchestrator crashed mid-parse): set `status = in-progress`, re-checkout the branch (`git -C "$REPO_ROOT" checkout <branch>`), and re-spawn the task agent using §task-agent-prompt. The agent will re-explore and re-commit (idempotent if the code is already correct; TDD loop will pass immediately and produce a new final report).
-- **Handle `done` tasks:** No cleanup needed. Branch was deleted during §merge-flow.
-- **Handle `failed` / `skipped` tasks:** Delete branches based on keep-vs-delete rules (see Phase 7 table).
-
-After state cleanup: invoke queue-drain (Phase 5b) to continue from where the session left off.
+- Load JSON state
+- **Prune stale worktrees:** For any task with `status` in (`done`, `failed`, `skipped`) that has a non-null `worktreePath`:
+  ```bash
+  git -C "$REPO_ROOT" worktree remove <worktreePath> --force 2>/dev/null || true
+  ```
+  After iterating all such tasks, run once:
+  ```bash
+  git -C "$REPO_ROOT" worktree prune
+  ```
+  Set `worktreePath = null` in JSON for each cleaned task. Write updated JSON.
+- For `in-progress` tasks: check if worktree exists and PR was opened. If neither exists and the previous run started >30 min ago, mark `failed` with `failureReason = "agent did not produce a PR before resume — likely crashed or timed out"`.
+- For `pr-open` tasks: detect manually-merged PRs (`gh pr view --json state` returns `MERGED`) → treat as `done`. Detect deleted branches (`git ls-remote origin <branch>` empty AND PR closed unmerged) → treat as `failed` with reason "branch deleted externally".
+- For `pr-open` / `ci-pass` tasks: re-poll CI and reviews immediately (§Phase 6)
+- For `pending` tasks now unblocked: launch agents (§Phase 5)
+- Continue from Phase 6
 
 ---
 
@@ -843,45 +854,25 @@ Print the session banner:
 
 ```
 ══════════════════════════════════════════════════════════════
-  SHIP-IT COMPLETE — <PRD_TITLE>
+  SHIP-IT-WORKTREE COMPLETE — <PRD_TITLE>
 ══════════════════════════════════════════════════════════════
   Total tasks:  N
-  Done:         N  (merged and confirmed)
-  Failed:       N  (TDD skip, regression, or rebase conflict)
+  Done:         N  (PRs merged)
+  Failed:       N  (TDD skip or CI unresolvable)
   Skipped:      N  (user skipped HITL)
 ══════════════════════════════════════════════════════════════
 ```
 
 Print the full dashboard table.
 
-### Branch cleanup (belt-and-suspenders)
-
-`done` tasks already had their branch deleted in §merge-flow. For remaining tasks:
-
-| Failure reason | Keep branch? |
-|----------------|--------------|
-| `TDD skipped: ...` | no — no usable code |
-| `Agent timed out` | no |
-| `Agent crashed before producing code` | no |
-| `Agent produced no final report` | no |
-| Agent `TASK_FAILED: <other>` | no — agent reported failure |
-| `Rebase conflict — manual resolution required` | **yes** — fix committed, conflict in rebase |
-| `Regression after rebase` | **yes** — fix committed, rebase introduced break |
-| `Fast-forward merge failed — base branch advanced` | **yes** — fix committed, needs rebase |
-
+Clean up any remaining worktrees for `failed` or `skipped` tasks (belt-and-suspenders — §6a and §ci-fix should have already cleaned these, but handle crash/resume gaps):
 ```bash
-# For each task with non-null branch where keep = false:
-git -C "$REPO_ROOT" branch -D <branch> 2>/dev/null || true
-
-# For each task with non-null branch where keep = true:
-# Print: "#<id> <title> — branch <branch> kept for manual recovery."
+# For each task with status failed/skipped and non-null worktreePath:
+git -C "$REPO_ROOT" worktree remove <worktreePath> --force 2>/dev/null || true
 ```
+After iterating, run once: `git -C "$REPO_ROOT" worktree prune`. Set `worktreePath = null` for each. Write JSON.
 
-For each kept branch: print `#<id> <title> — branch <branch> kept for manual recovery.`
-
-### File GitHub issues for failed tasks
-
-For each `status: failed` task:
+For each `failed` task, file a GitHub issue:
 
 ```bash
 gh issue create \
@@ -895,18 +886,16 @@ gh issue create \
 
 #<issueNumber>
 
-## Branch (if preserved)
+## Worktree (may still exist)
 
-<branch or 'deleted'>
+<worktreePath>
 
 ## Notes
 
 <notes>"
 ```
 
-### Close milestone
-
-Close ONLY if all tasks are `done` or `skipped` — never if any are `failed`:
+Close the milestone ONLY if all tasks are `done` or `skipped` — never if any are `failed`:
 
 ```bash
 gh api repos/:owner/:repo/milestones/<MILESTONE_NUMBER> \
@@ -914,19 +903,18 @@ gh api repos/:owner/:repo/milestones/<MILESTONE_NUMBER> \
   --field state="closed"
 ```
 
+
 ---
 
 ## Orchestrator rules
 
-- **One task at a time** — never spawn an agent while any task has `status` in `{in-progress, pending-review}`
-- **Create branch BEFORE spawning agent** — `git checkout -b` in main repo, not a worktree
-- **Never push or open PRs** — no remote push from orchestrator or task agents; merging is local and orchestrator-driven
-- **Queue-drain runs after EVERY terminal transition** — `done`, `failed`, or `skipped`; §coordinator is the sole owner
-- **DAG unlock runs in §merge-flow Step 3 (Confirmed path)** — not at merge time, not before user confirms
-- **Validate `<MARKER_PREFIX>#N` marker** before accepting any `TASK_COMPLETE`
+- **Create worktrees BEFORE spawning agents** — never simultaneously with Agent calls
+- **Launch ALL ready agents in ONE response** — multiple Agent tool calls, same message, `run_in_background: true`
+- **Validate `// ship-it:#N` marker** before accepting any `TASK_COMPLETE`
 - **`TDD_SKIPPED` = hard failure** — no retry, no partial accept
+- **Never push commits from the orchestrator** — only from within task/fix/review agents
 - **JSON sidecar = ground truth** — re-read before each write; dashboard is derived
-- **Dashboard MUST be written after EVERY status change** — never batch, never skip
+- **Dashboard MUST be written after EVERY status change** — never batch, never skip; one transition = one file write
 - **Update GitHub issue labels** on every status transition
 - **Do not close the milestone** if any task is `failed`
-- **Issue close happens AFTER user confirmation** (§merge-flow Step 3 "Confirmed"), never before
+- **Poll interval is a minimum** — process completions immediately as notifications arrive
