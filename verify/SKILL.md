@@ -2,7 +2,7 @@
 name: verify
 description: Verify that a running app's behaviour matches a checklist of expected outcomes. Auto-starts the app if it isn't running, spawns a fresh-context subagent (curl-only, no code access) to verify each item, then shuts the app down. Reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Invoke as /verify.
 model: opus
-argument-hint: "--checklist <path> [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>]"
+argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>]"
 ---
 
 # /verify — Behavioural Verification
@@ -17,12 +17,24 @@ Check that an app matches a list of expected behaviours. Auto-starts the app if 
 
 Parse from the invocation string:
 
-- `--checklist <path>` — **(required)** path to a file containing expected behaviours
+- `--checklist <path>` — path to checklist file (optional when `.checklist/` files exist — see auto-resolve below)
+- `--prd <number>` — use `.checklist/prd-<number>.md` (shorthand for PRD-backed checklists)
 - `--base-url <url>` — base URL of the running app (default: `http://localhost:3000`)
 - `--timeout <seconds>` — max seconds to wait for async behaviours (default: 30)
 - `--start-cmd <command>` — override auto-detected start command
 
-If `--checklist` is missing: abort with `"--checklist <path> is required. Example: /verify --checklist .checklist/my-feature.md"`
+### Checklist auto-resolve (when `--checklist` and `--prd` are both absent)
+
+```bash
+CHECKLIST_DIR="$(git rev-parse --show-toplevel 2>/dev/null)/.checklist"
+[ -d "$CHECKLIST_DIR" ] || CHECKLIST_DIR="./.checklist"
+```
+
+- If `--prd <N>`: use `$CHECKLIST_DIR/prd-<N>.md`. Abort if not found.
+- If no flag: list `.md` files in `$CHECKLIST_DIR`, sorted by modification time descending.
+  - Zero files → abort: `"No checklist found. Run /interview-me, /grill-me, or /write-a-prd first, or pass --checklist <path>."`
+  - Exactly one file → use it. Print: `Using checklist: <path>`
+  - Multiple files → print the list and abort: `"Multiple checklists found. Specify one with --checklist <path> or --prd <number>:"`
 
 If `--fix` is passed: abort with `"--fix is not yet available. Remove the flag and re-run."`
 
