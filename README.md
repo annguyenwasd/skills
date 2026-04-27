@@ -86,57 +86,95 @@ After linking, each skill is invocable in Claude Code as `/<skill-name>` (e.g. `
 
 ## Workflows
 
-Three entry points, all converging on `/ship-it`:
+### Full pipeline
 
 ```
                   non-technical idea
                          │
-                  /interview-me ──┐
+                  /interview-me ──┐  writes .checklist/interview-*.md
                                   │
                   technical idea  │
                          │        ▼
-                   /grill-me ─► /write-a-prd ─► /ship-it
+                   /grill-me ─► /write-a-prd ─► /ship-it --verify
+                   (writes         (writes PRD     (ships + verifies
+                   .checklist/     issue #N +       + posts evidence
+                   grill-*.md)     .checklist/      to PRD issue)
+                                   prd-N.md)
                                   ▲
-                  PRD already in head
+                  PRD already exists
                          │        │
                          └────────┘
 ```
 
-### 1. Non-technical pitch → ship
+Every planning skill writes a `.checklist/` file (git-ignored). `/verify` reads it. `/ship-it --verify` runs it automatically after merging.
 
-For vague product ideas, client-style requests, or anything where the requirements aren't engineer-ready.
+---
 
-```
-/interview-me  →  /write-a-prd  →  /ship-it
-```
-
-`/interview-me` runs a four-pass business-analyst interview to surface decisions and tradeoffs in plain language. The output feeds `/write-a-prd`, which turns it into a structured PRD and files it as a GitHub issue. `/ship-it` slices the PRD into dependency-ordered issues and drives parallel TDD agents to merge.
-
-### 2. Technical plan → ship
-
-For engineer-to-engineer plans where jargon is fine and the goal is to pressure-test the design tree.
+### 1. Non-technical pitch → ship + verify
 
 ```
-/grill-me  →  /write-a-prd  →  /ship-it
+/interview-me  →  /write-a-prd  →  /ship-it --prd <N> --verify
 ```
 
-`/grill-me` interrogates every branch of the decision tree until each is resolved. Same downstream as above.
+`/interview-me` runs a four-pass business-analyst interview and writes `.checklist/interview-<timestamp>.md`. `/write-a-prd` produces a structured PRD issue with an `## Acceptance Checklist` section and writes `.checklist/prd-<N>.md`. `/ship-it --verify` ships all slices then verifies the running app against the checklist, posting per-item evidence comments on the PRD issue.
 
-### 3. PRD already drafted → ship
-
-When the requirements are clear enough to skip discovery.
+### 2. Technical plan → ship + verify
 
 ```
-/write-a-prd  →  /ship-it
+/grill-me  →  /write-a-prd  →  /ship-it --prd <N> --verify
 ```
 
-Or, if a PRD file/issue already exists, jump straight to `/ship-it <prd-path-or-issue>`.
+`/grill-me` interrogates every branch of the decision tree and writes `.checklist/grill-<timestamp>.md`. Same downstream as above.
+
+### 3. PRD already drafted → ship + verify
+
+```
+/write-a-prd  →  /ship-it --prd <N> --verify
+```
+
+Or jump straight to `/ship-it --prd <file-or-issue> --verify` if the PRD exists.
+
+### 4. Verify + auto-fix after shipping
+
+```
+/verify --prd <N> --fix
+```
+
+Re-runs verification against the live app. For each FAIL or TIMEOUT item, spawns a sequential TDD fix agent (RED → GREEN → PR). Three outcomes per item: `FIX_COMPLETE` (PR opened), `FIX_FAILED` (needs manual), `FIX_NOT_NEEDED` (checklist item was wrong).
+
+### `/verify` reference
+
+```bash
+/verify                              # auto-picks latest .checklist/ file
+/verify --prd 42                     # uses .checklist/prd-42.md
+/verify --checklist path/to/file.md  # explicit file
+/verify --fix                        # verify + TDD fix each FAIL/TIMEOUT
+/verify --base-url http://localhost:8080 --timeout 60
+/verify --start-cmd "npm run dev"    # override auto-detected start command
+```
+
+App lifecycle: `/verify` auto-detects the start command (package.json → Procfile → Cargo → Python → Makefile), starts the app, verifies, then shuts it down. If already running, skips start/stop.
+
+Verification subagent has **zero code access** — only curl + the checklist. Prevents the implementer from rubber-stamping their own work.
 
 ### Optional checkpoints
 
 - `/audit` — stress-test a PRD or plan for missing edge cases before slicing.
 - `/design` — generate an HTML mockup for a screen before `/ship-it` implements it.
 - `/improve-codebase-architecture` — run before large feature work to surface refactors that make the slices testable.
+- `/qa` / `/qa-worktree` — interactive bug fixing after manual testing; complements `/verify` for UI and non-HTTP behaviours.
+
+### `.checklist/` convention
+
+Planning skills write checklist files to `<project-root>/.checklist/`:
+
+| Source | File |
+|---|---|
+| `/interview-me` | `.checklist/interview-<YYYYMMDD-HHMMSS>.md` |
+| `/grill-me` | `.checklist/grill-<YYYYMMDD-HHMMSS>.md` |
+| `/write-a-prd` | `.checklist/prd-<issue-number>.md` |
+
+These files are git-ignored (added automatically by `/write-a-prd`; add `.checklist/` to your global gitignore for other workflows).
 
 ## Resources
 
