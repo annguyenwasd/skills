@@ -24,6 +24,7 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 | `prd-to-issues` | Slice a PRD into vertical, independently-shippable GitHub issues. |
 | `ship-it` | End-to-end PRD orchestrator — issue DAG, parallel agents, TDD per slice. |
 | `tdd` | Red-green-refactor TDD loop for features and bugfixes. |
+| `verify` | Verify a running app's behaviour against a checklist. Spawns a fresh-context subagent (no code knowledge) and reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. |
 | `write-a-prd` | Produce a PRD via interview, codebase exploration, and module design; submit as a GitHub issue. |
 
 ## Prerequisites
