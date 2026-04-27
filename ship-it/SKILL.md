@@ -2,7 +2,7 @@
 name: ship-it
 description: End-to-end PRD orchestrator. Takes a PRD file path or GitHub issue URL/number, breaks it into a dependency-ordered task DAG, creates GitHub issues with labels and milestone, then spawns parallel TDD agent swarms in isolated git worktrees — one per ready task. Each agent implements strict RED-GREEN-REFACTOR TDD, opens a PR quoting the PRD section, links to the parent issue. Monitors CI (re-invokes fix agents on failure), polls PR review comments every N minutes and addresses them with follow-up commits. Unlocks dependent tasks as PRs merge. Produces a live markdown dashboard. Supports --dry-run to render the ASCII DAG without executing. Use when user says "ship it", "ship this PRD", "run ship-it", or invokes /ship-it.
 model: opus
-argument-hint: "--prd <file|url|number> (--dry-run) (--poll <minutes>) (--max-iter <n>)"
+argument-hint: "--prd <file|url|number> (--dry-run) (--poll <minutes>) (--max-iter <n>) (--verify) (--base-url <url>)"
 ---
 
 # Ship-It-Worktree Orchestrator
@@ -14,13 +14,15 @@ Autonomously ship a PRD: DAG decomposition → GitHub issues → parallel TDD sw
 ## Usage
 
 ```
-/ship-it --prd <file-or-issue-url-or-number> [--dry-run] [--poll <minutes>] [--max-iter <n>]
+/ship-it --prd <file-or-issue-url-or-number> [--dry-run] [--poll <minutes>] [--max-iter <n>] [--verify] [--base-url <url>]
 ```
 
 - `--prd` — local Markdown file path, GitHub issue URL, or issue number
 - `--dry-run` — render the ASCII DAG and stop; create nothing
 - `--poll` — CI/review polling interval in minutes (default: 5)
 - `--max-iter` — max TDD iterations per task agent (default: 10)
+- `--verify` — run `/verify` after all tasks complete; post per-item evidence comments on the PRD issue
+- `--base-url` — base URL for `--verify` (default: `http://localhost:3000`)
 
 ---
 
@@ -76,7 +78,9 @@ Task status values (in order): `pending → in-progress → pr-open → ci-pass 
 
 ## Phase 0 — Parse arguments and ingest PRD
 
-Extract `--prd`, `--dry-run`, `--poll` (default 5), `--max-iter` (default 10).
+Extract `--prd`, `--dry-run`, `--poll` (default 5), `--max-iter` (default 10), `--verify` (boolean, default false), `--base-url` (default `http://localhost:3000`).
+
+Store `verifyEnabled` (bool) and `baseUrl` (string) in the JSON sidecar.
 
 Capture the current branch as the base branch for all PRs:
 ```bash
@@ -903,6 +907,80 @@ gh api repos/:owner/:repo/milestones/<MILESTONE_NUMBER> \
   --field state="closed"
 ```
 
+---
+
+## §verify — Post-completion behavioural verification (runs only when `--verify` flag is set)
+
+Skip entirely if `verifyEnabled = false`.
+
+### 1. Resolve checklist
+
+If `PRD_SOURCE` is a GitHub issue number:
+```bash
+# Extract ## Acceptance Checklist section from the PRD issue body
+CHECKLIST=$(gh issue view <PRD_SOURCE> --json body --jq '.body' | \
+  awk '/^## Acceptance Checklist/,/^## [^A]/' | grep -v '^## ')
+```
+
+If no checklist found in the issue (section missing or empty):
+- Check for `.checklist/prd-<PRD_SOURCE>.md` in the repo root
+- If still not found: print `VERIFY_SKIPPED: no Acceptance Checklist found in PRD #<PRD_SOURCE> and no .checklist/prd-<N>.md. Add an ## Acceptance Checklist section to the PRD issue, then re-run with --verify.` and skip §verify entirely.
+
+If `PRD_SOURCE` is a file path:
+- Check for `.checklist/<PRD_SLUG>.md`; if absent: skip with same message.
+
+### 2. Start the app
+
+Using the same detection logic as `/verify` §Step 3, auto-detect and start the app from `REPO_ROOT` on `BASE_BRANCH`. Store `APP_PID`. Wait up to 30s for ready.
+
+If app fails to start: post a comment on the PRD issue:
+```bash
+gh issue comment <PRD_SOURCE> --body "## 🔴 Behavioural Verification — FAILED TO START
+
+App did not start within 30s at <BASE_URL>. Run /verify manually after starting the app."
+```
+Then skip remaining §verify steps.
+
+### 3. Run verification subagent
+
+Spawn one `general-purpose` Agent (foreground) with the same prompt as `/verify` §Step 5, substituting the resolved checklist and `BASE_URL`.
+
+### 4. Post results to PRD issue
+
+After subagent completes, for each checklist item post one GitHub comment:
+
+```bash
+gh issue comment <PRD_SOURCE> --body "$(cat <<'EOF'
+### Verification: #<N> — <item text>
+
+**Status:** PASS ✅ | FAIL ❌ | TIMEOUT ⏱️ | ASSUMED ⚠️ | UNVERIFIABLE 🔲
+
+**Evidence:** <evidence from subagent>
+EOF
+)"
+```
+
+### 5. Update PRD issue checklist
+
+Fetch the current PRD issue body, replace each `- [ ]` item in the `## Acceptance Checklist` section with the verified status:
+
+- PASS → `- [x] ✅ <item>`
+- FAIL → `- [ ] ❌ <item>`
+- TIMEOUT → `- [ ] ⏱️ <item>`
+- ASSUMED → `- [x] ⚠️ <item>`
+- UNVERIFIABLE → `- [ ] 🔲 <item>`
+
+```bash
+gh issue edit <PRD_SOURCE> --body "<updated body>"
+```
+
+### 6. Shutdown and print summary
+
+```bash
+kill $APP_PID 2>/dev/null; wait $APP_PID 2>/dev/null
+```
+
+Print the verification summary table from the subagent output.
 
 ---
 
