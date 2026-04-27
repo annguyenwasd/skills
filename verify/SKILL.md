@@ -2,7 +2,7 @@
 name: verify
 description: Verify that a running app's behaviour matches a checklist of expected outcomes. Auto-starts the app if it isn't running, spawns a fresh-context subagent (curl-only, no code access) to verify each item, then shuts the app down. Reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Invoke as /verify.
 model: opus
-argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>] [--fix]"
+argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>] [--fix] [--no-browser]"
 ---
 
 # /verify — Behavioural Verification
@@ -23,6 +23,7 @@ Parse from the invocation string:
 - `--timeout <seconds>` — max seconds to wait for async behaviours (default: 30)
 - `--start-cmd <command>` — override auto-detected start command
 - `--fix` — after verification, spawn a sequential TDD fix agent for each FAIL and TIMEOUT item; each agent opens a PR
+- `--no-browser` — skip the browser verification pass (by default, UNVERIFIABLE items are re-verified with Playwright if available)
 
 ### Checklist auto-resolve (when `--checklist` and `--prd` are both absent)
 
@@ -253,6 +254,43 @@ OUTPUT — your final output must be EXACTLY this format
 
 ---
 
+## Step 5b — Browser verification pass
+
+Skip entirely if:
+- `--no-browser` was passed
+- Zero `UNVERIFIABLE` items in the Step 5 report
+
+### 5b-1. Playwright availability check
+
+```bash
+npx playwright --version 2>/dev/null
+```
+
+If unavailable: print the following warning, then continue to §Step 6 (UNVERIFIABLE items remain as-is):
+
+```
+Browser pass skipped: Playwright not found.
+To enable browser verification, install it:
+  <pm> add -D @playwright/test && npx playwright install chromium
+```
+
+Where `<pm>` is the package manager detected in §Step 3a (`pnpm`/`yarn`/`npm`). If §Step 3a did not run (app was already running when /verify started), re-detect: `pnpm-lock.yaml` → `pnpm add`; `yarn.lock` → `yarn add`; else → `npm install`. If no lock file: use `npm install`.
+
+### 5b-2. Spawn browser subagent
+
+Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using §verify-browser-agent-prompt.
+
+Pass **only**: the UNVERIFIABLE items (numbered), the base URL, and the timeout. No codebase context, no git history, no other lines from the report.
+
+### 5b-3. Merge results
+
+After the subagent returns:
+- Replace each UNVERIFIABLE row in the Step 5 report table with the browser result for that item number.
+- Recompute all Summary counts.
+- In §Step 6, print the merged report (not the original Step 5 report).
+
+---
+
 ## Step 6 — Display result and shutdown
 
 Print the subagent's full output verbatim.
@@ -304,11 +342,12 @@ You are a fix agent. One behavioural verification item failed. Make it pass usin
 ═══════════════════════════════════════════════════════
 CONTEXT
 ═══════════════════════════════════════════════════════
-REPO ROOT   : <repo-root>
-BASE BRANCH : <base-branch>
-FIX BRANCH  : <fix-branch>
-ITEM        : <failing checklist item — full text>
-EVIDENCE    : <what the app returned, from the verification report>
+REPO ROOT    : <repo-root>
+BASE BRANCH  : <base-branch>
+FIX BRANCH   : <fix-branch>
+ITEM         : <failing checklist item — full text>
+EVIDENCE     : <what the app returned, from the verification report>
+BROWSER_ITEM : <true if item was verified by the browser pass, false if verified by curl pass>
 
 ═══════════════════════════════════════════════════════
 STEPS
@@ -324,6 +363,10 @@ STEPS
   Store as TEST_CMD.
 
 ── RED — write a failing test ───────────────────────────
+  ▶ If BROWSER_ITEM=true:
+    Output: FIX_FAILED: browser-verified item — auto-fix requires Playwright test setup
+    Do NOT write tests. Do NOT commit. STOP.
+
   Write ONE test that captures the expected behaviour from ITEM.
   The test must exercise public interfaces only — no private methods.
   Add this marker on the line IMMEDIATELY above the test function/call:
@@ -387,6 +430,87 @@ FINAL REPORT — last line must be EXACTLY one of:
 
 ---
 
+## §verify-browser-agent-prompt
+
+```
+You are a browser-based behavioural verifier. A curl-only verification pass already ran
+and marked certain items UNVERIFIABLE. Your job: attempt to verify those items by
+controlling a headless browser via Playwright.
+
+You have NO access to the implementation code, git history, or PRD. You only know:
+1. The UNVERIFIABLE checklist items from the prior curl pass
+2. The app's base URL
+3. How to write and run a Playwright Node.js script
+
+TOOL CONSTRAINTS — STRICT
+- Use Bash ONLY to write ONE script to /tmp and run it with node / npx.
+- DO NOT use Read, Grep, Glob, or Bash to access any project file.
+- DO NOT run: cat, ls, find, git, cd into any directory, or read any source file.
+- You may ONLY write to /tmp/verify-browser-<timestamp>.mjs — no other file paths.
+- Infer all navigation paths from checklist text alone. If a path cannot be inferred,
+  mark the item UNVERIFIABLE (browser) — do NOT read routes or components.
+
+═══════════════════════════════════════════════════════
+CONNECTION
+═══════════════════════════════════════════════════════
+BASE URL : <base-url>
+TIMEOUT  : <timeout> seconds
+
+═══════════════════════════════════════════════════════
+UNVERIFIABLE ITEMS TO RE-CHECK
+═══════════════════════════════════════════════════════
+<UNVERIFIABLE_ITEMS — original item numbers and full text>
+
+═══════════════════════════════════════════════════════
+HOW TO VERIFY — repeat for EACH item
+═══════════════════════════════════════════════════════
+
+── STEP 1: CLASSIFY ────────────────────────────────────
+Can this item be verified by controlling a browser (clicks, navigation, visible text,
+DOM state, form submission)? If still not verifiable even with a browser (e.g. email
+delivery, server-side-only state): mark UNVERIFIABLE — <reason>. Move to next item.
+
+── STEP 2: WRITE PLAYWRIGHT SCRIPT ────────────────────
+Write a single Node.js script to /tmp/verify-browser-<timestamp>.mjs that:
+  - Uses `import { chromium } from 'playwright'`
+  - Launches chromium headless: `const browser = await chromium.launch({ headless: true })`
+  - Navigates to BASE URL (and sub-paths inferred from checklist text only)
+  - Checks the relevant DOM state, visible text, or UI behaviour per item
+  - Prints one JSON result object per item to stdout:
+    { "item": <number>, "status": "PASS"|"FAIL"|"TIMEOUT"|"ASSUMED"|"UNVERIFIABLE",
+      "evidence": "<≤100 chars>" }
+  - Closes the browser and exits 0 regardless of result
+
+Run:
+  node /tmp/verify-browser-<timestamp>.mjs
+
+── STEP 3: HANDLE VAGUE ITEMS ─────────────────────────
+Same rule as curl pass: vague items → document inference, mark ASSUMED not PASS.
+
+── STEP 4: ASYNC UI BEHAVIOURS ────────────────────────
+If a behaviour requires waiting (e.g. spinner resolves, toast appears):
+  - Poll with page.waitForSelector or page.waitForFunction up to <timeout> seconds.
+  - If not resolved within timeout: mark TIMEOUT — <what was waited for>.
+
+── STEP 5: CLEAN UP ───────────────────────────────────
+\```bash
+rm -f /tmp/verify-browser-<timestamp>.mjs
+\```
+
+═══════════════════════════════════════════════════════
+OUTPUT — your final output must be EXACTLY these rows
+(only for the items you were assigned — use original item numbers)
+═══════════════════════════════════════════════════════
+
+| <#> | <item text, max 60 chars> | PASS | Heading "Create account" visible at /register |
+| <#> | <...> | FAIL | Button disabled — expected enabled after valid input |
+| <#> | <...> | ASSUMED | "friendly message" inferred as non-empty p tag. Found ✓ |
+| <#> | <...> | TIMEOUT | Waited 30s for modal to close — still open |
+| <#> | <...> | UNVERIFIABLE (browser) | Cannot infer UI path from checklist text |
+```
+
+---
+
 ## Rules
 
 - Never pass codebase files, git history, PRD content, or implementation details to the verification subagent
@@ -394,3 +518,6 @@ FINAL REPORT — last line must be EXACTLY one of:
 - Print the verification report verbatim — do not summarise, editorialize, or reformat it
 - `--fix` runs sequentially — never spawn fix agents in parallel (risk of merge conflicts)
 - Fix agents MAY read the codebase — unlike the verification subagent, they need code context to fix bugs
+- Browser pass runs by default; `--no-browser` skips it
+- Browser pass re-verifies only `UNVERIFIABLE` items — never re-runs curl-verified results
+- Browser subagent has same code-isolation contract as the curl subagent; it may only write scripts to `/tmp`
