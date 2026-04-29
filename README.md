@@ -19,7 +19,6 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 | `grill-me` | Interrogate a technical plan branch-by-branch until every decision is resolved. |
 | `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability. |
 | `qa` | Sequential QA session that fixes bugs one at a time on a feature branch and queues additional bugs automatically. |
-| `qa-worktree` | Parallel QA session that spawns one isolated worktree and explore+fix agent per bug concurrently. Supports `--pr` for per-bug pull requests. |
 | `interview-me` | Business-analyst interview to pressure-test a non-technical client's plan. |
 | `prd-to-issues` | Slice a PRD into vertical, independently-shippable GitHub issues. |
 | `ship-it` | End-to-end PRD orchestrator — issue DAG, parallel agents, TDD per slice. |
@@ -162,7 +161,7 @@ Verification subagent has **zero code access** — only curl + the checklist. Pr
 - `/audit` — stress-test a PRD or plan for missing edge cases before slicing.
 - `/design` — generate an HTML mockup for a screen before `/ship-it` implements it.
 - `/improve-codebase-architecture` — run before large feature work to surface refactors that make the slices testable.
-- `/qa` / `/qa-worktree` — interactive bug fixing after manual testing; complements `/verify` for UI and non-HTTP behaviours.
+- `/qa` — interactive bug fixing after manual testing; complements `/verify` for UI and non-HTTP behaviours.
 
 ### `.checklist/` convention
 
