@@ -59,15 +59,15 @@ Provides `/commit`, `/commit-push-pr`, `/clean_gone`.
 
 The custom `/commit-push` command (commit + push, no PR) lives in `commands/commit-push.md` in this repo and is symlinked into `~/.claude/commands/` by `link-claude-md.sh`.
 
-### Playwright (for `/verify` browser pass)
+### playwright-cli (for `/verify` browser pass)
 
 ```bash
-npm i -g @playwright/cli         # CLI — github.com/microsoft/playwright-cli
-npm i -D playwright              # local Node API (per project that needs browser verification)
-npx playwright install chromium  # browser binary
+npm install -g @playwright/cli@latest   # CLI — github.com/microsoft/playwright-cli
+playwright-cli install --skills         # bundled agent skills (one-time)
+npx playwright install chromium         # browser binary
 ```
 
-`/verify` re-checks `UNVERIFIABLE` items by driving a headless Chromium. Skipped automatically if any of the three pieces is missing — see warning text in `verify/SKILL.md` § 5b-1. Pass `--no-browser` to opt out.
+`/verify` re-checks `UNVERIFIABLE` items by driving a headless Chromium through `playwright-cli`. Skipped automatically if the CLI is missing — see warning text in `verify/SKILL.md` 5b-1. Pass `--no-browser` to opt out.
 
 ### GitHub MCP server
 

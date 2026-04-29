@@ -280,19 +280,13 @@ OUTPUT — your final output must be EXACTLY this format
 
 ---
 
-## Step 5b — Browser verification pass (Playwright)
+## Step 5b — Browser verification pass (playwright-cli)
 
 Skip entirely if:
 - `--no-browser` was passed
 - Zero `UNVERIFIABLE` items in the Step 5 report
 
-### 5b-1. Playwright availability check
-
-Record the project root first — the Node check below and the browser subagent both use it:
-
-```bash
-PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
-```
+### 5b-1. playwright-cli availability check
 
 Derive the screenshot output directory from the checklist path and create it lazily (only reached when Step 5b actually runs — i.e. `--no-browser` was not passed and at least one item is UNVERIFIABLE):
 
@@ -308,37 +302,52 @@ The `rm -f` clears stale `item-*.png` files from prior runs of the same checklis
 
 For example, `--qa 1` resolves to `.checklist/qa-1.md` → `SCREENSHOT_DIR=.checklist/qa-1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by /qa.
 
-Two checks must both succeed:
+Mint a unique session name so concurrent CLI sessions (other `/verify` runs, manual debugging) don't collide on the same browser:
 
 ```bash
-# (a) Playwright CLI available (global @playwright/cli or npx fallback)
-npx --no-install playwright --version 2>/dev/null
-
-# (b) Node import resolves from PROJECT_ROOT and chromium binary present
-(cd "$PROJECT_ROOT" && node -e "
-  const fs = require('fs');
-  const { chromium } = require('playwright');
-  fs.accessSync(chromium.executablePath());
-") 2>/dev/null
+BROWSER_SESSION="verify-$(date +%s)-$$"
 ```
 
-If either check fails: print the following warning, then continue to Step 6 (UNVERIFIABLE items remain as-is):
+Resolve the CLI invocation once — global if available, otherwise local via `npx`:
+
+```bash
+if playwright-cli --version >/dev/null 2>&1; then
+  BROWSER_CMD="playwright-cli"
+elif npx --no-install playwright-cli --version >/dev/null 2>&1; then
+  BROWSER_CMD="npx playwright-cli"
+else
+  BROWSER_CMD=""
+fi
+```
+
+Confirm chromium is actually installed by opening + closing a throwaway probe session (a real session would pollute `BROWSER_SESSION` if `open` partially succeeds):
+
+```bash
+PROBE_SESSION="verify-probe-$$"
+PROBE_OK=0
+if [ -n "$BROWSER_CMD" ]; then
+  if $BROWSER_CMD -s="$PROBE_SESSION" open about:blank >/dev/null 2>&1; then
+    PROBE_OK=1
+  fi
+  $BROWSER_CMD -s="$PROBE_SESSION" close >/dev/null 2>&1 || true
+fi
+```
+
+If `BROWSER_CMD` is empty or `PROBE_OK == 0`: print the following warning, then continue to Step 6 (UNVERIFIABLE items remain as-is):
 
 ```
-Browser pass skipped: Playwright CLI or local package missing, or chromium binary not installed.
+Browser pass skipped: playwright-cli not installed or chromium binary missing.
 To enable browser verification:
-  npm i -g @playwright/cli         # CLI
-  <pm> add -D playwright           # local Node API
-  npx playwright install chromium  # browser binary
+  npm install -g @playwright/cli@latest   # CLI
+  playwright-cli install --skills         # bundled agent skills (one-time)
+  npx playwright install chromium         # browser binary
 ```
-
-Where `<pm>` is the package manager detected in Step 3a (`pnpm`/`yarn`/`npm`/`bun`). If Step 3a did not run (app already running when /verify started), re-detect from `PROJECT_ROOT` (not orchestrator cwd): `pnpm-lock.yaml` → `pnpm add`; `yarn.lock` → `yarn add`; `bun.lockb` → `bun add`; else `npm install`.
 
 ### 5b-2. Spawn subagent
 
 Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using verify-browser-agent-prompt.
 
-Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, `PROJECT_ROOT` (from 5b-1, needed for module resolution), and `SCREENSHOT_DIR` (from 5b-1, where browser screenshots get written). No codebase context, no git history, no other lines from the report.
+Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, `BROWSER_CMD` (from 5b-1, the resolved CLI invocation — `playwright-cli` or `npx playwright-cli`), `BROWSER_SESSION` (from 5b-1, scopes every CLI command), and `SCREENSHOT_DIR` (from 5b-1, where browser screenshots get written). No codebase context, no git history, no other lines from the report.
 
 After the subagent returns → **5b-3. Merge results** (below).
 
@@ -367,6 +376,13 @@ VERIFY_ERROR: subagent did not produce a report.
 **Always** shut down after, regardless of outcome:
 
 ```bash
+# Defensive browser-session cleanup — the subagent's CLEANUP step closes
+# BROWSER_SESSION on the happy path; this catches crashes, timeouts, and kills
+# so chromium processes don't leak across runs.
+if [ -n "$BROWSER_SESSION" ] && [ -n "$BROWSER_CMD" ]; then
+  $BROWSER_CMD -s="$BROWSER_SESSION" close >/dev/null 2>&1 || true
+fi
+
 if [ "$APP_STARTED_BY_VERIFY" = "true" ]; then
   kill $APP_PID 2>/dev/null
   wait $APP_PID 2>/dev/null
@@ -509,28 +525,38 @@ FINAL REPORT — last line must be EXACTLY one of:
 ```
 You are a browser-based behavioural verifier. A curl-only verification pass already ran
 and marked certain items UNVERIFIABLE. Your job: attempt to verify those items by
-controlling a headless browser via Playwright.
+driving a headless browser via `playwright-cli`.
 
 You have NO access to the implementation code, git history, or PRD. You only know:
 1. The UNVERIFIABLE checklist items from the prior curl pass
 2. The app's base URL
-3. How to write and run a Playwright Node.js script
+3. The CLI invocation (`playwright-cli` or `npx playwright-cli`, pre-resolved)
+4. The session name to scope every CLI command to
+5. The screenshot output directory
 
 TOOL CONSTRAINTS — STRICT
-- Use Bash ONLY to write ONE script to /tmp and run it with node / npx.
+- Use Bash ONLY to invoke `<browser-cmd>` (the pre-resolved CLI from the CONNECTION block).
 - DO NOT use Read, Grep, Glob, or Bash to access any project file.
-- DO NOT run: cat, ls, find, git, cd into any directory, or read any source file.
-- You may ONLY write to /tmp/verify-browser-<timestamp>.mjs and PNG files inside <SCREENSHOT_DIR> — no other file paths. (Read-isolation is unchanged: still no project file reads.)
+- DO NOT run: cat, ls, find, git, cd into any project directory, or read source files.
+- You MAY only write files inside `/tmp/` and inside `<SCREENSHOT_DIR>` — no other paths.
+- DO NOT shell out to `node`, `npm`, or write `.mjs`/`.js` scripts. Drive everything
+  through `playwright-cli` subcommands.
+- `cd /tmp` once at the start so playwright-cli's auto-snapshot files land in
+  `/tmp/.playwright-cli/`, not the project root.
 - Infer all navigation paths from checklist text alone. If a path cannot be inferred,
   mark the item UNVERIFIABLE (browser) — do NOT read routes or components.
+- The bundled `playwright-cli` skill is installed; consult `playwright-cli --help` if
+  unsure of a command. Prefer locators (`getByRole(...)`, `getByTestId(...)`,
+  `getByText(...)`) or refs surfaced by snapshot output over raw CSS.
 
 ═══════════════════════════════════════════════════════
 CONNECTION
 ═══════════════════════════════════════════════════════
-BASE URL       : <base-url>
-TIMEOUT        : <timeout> seconds
-PROJECT_ROOT   : <absolute path to repo where playwright is installed>
-SCREENSHOT_DIR : <absolute path to <checklist-stem>-screenshots dir, pre-created>
+BASE URL         : <base-url>
+TIMEOUT          : <timeout> seconds
+BROWSER_CMD      : <browser-cmd>       (substitute verbatim — `playwright-cli` or `npx playwright-cli`)
+BROWSER_SESSION  : <browser-session>   (prepend `-s=<browser-session>` to every command)
+SCREENSHOT_DIR   : <absolute path to <checklist-stem>-screenshots dir, pre-created>
 
 ═══════════════════════════════════════════════════════
 UNVERIFIABLE ITEMS TO RE-CHECK
@@ -538,58 +564,50 @@ UNVERIFIABLE ITEMS TO RE-CHECK
 <UNVERIFIABLE_ITEMS — original item numbers and full text>
 
 ═══════════════════════════════════════════════════════
-HOW TO VERIFY — repeat for EACH item
+HOW TO VERIFY
 ═══════════════════════════════════════════════════════
 
-── STEP 1: CLASSIFY ────────────────────────────────────
-Can this item be verified by controlling a browser (clicks, navigation, visible text,
-DOM state, form submission)? If still not verifiable even with a browser (e.g. email
-delivery, server-side-only state): mark UNVERIFIABLE — <reason>. Move to next item.
+── SETUP (once) ────────────────────────────────────────
+  cd /tmp
+  <browser-cmd> -s=<browser-session> open <base-url>
 
-── STEP 2: WRITE PLAYWRIGHT SCRIPT ────────────────────
-Write a single Node.js script to /tmp/verify-browser-<timestamp>.mjs that:
-  - Declares the screenshot directory as a constant at the top of the script,
-    using the absolute path from the CONNECTION block:
-      const SCREENSHOT_DIR = '<absolute SCREENSHOT_DIR value verbatim>';
-  - Uses `import { chromium } from 'playwright'`
-  - Launches chromium headless: `const browser = await chromium.launch({ headless: true })`
-  - Navigates to BASE URL (and sub-paths inferred from checklist text only)
-  - Checks the relevant DOM state, visible text, or UI behaviour per item
-  - After each item's verification action and assertion completes, captures
-    a screenshot to <SCREENSHOT_DIR>/item-<n>.png (where n is the original
-    item number). Wrap the call in try/catch — a screenshot failure must NOT
-    change the item's status; on capture error, set a `screenshotOk: false`
-    flag on the result object and continue:
-      try {
-        await page.screenshot({
-          path: `${SCREENSHOT_DIR}/item-${n}.png`,
-          fullPage: true,
-        });
-        result.screenshotOk = true;
-      } catch (e) {
-        result.screenshotOk = false;
-      }
-  - Prints one JSON result object per item to stdout:
-    { "item": <number>, "status": "PASS"|"FAIL"|"TIMEOUT"|"ASSUMED"|"UNVERIFIABLE",
-      "evidence": "<≤100 chars>", "screenshotOk": <true|false> }
-  - Closes the browser and exits 0 regardless of result
+── PER ITEM ────────────────────────────────────────────
+1. CLASSIFY — can this item be verified by controlling a browser (clicks, navigation,
+   visible text, DOM state, form submission)? If still not verifiable even with a
+   browser (e.g. email delivery, server-side-only state): mark
+   `UNVERIFIABLE (browser)` — <reason>. Move to next item.
 
-Run with PROJECT_ROOT in NODE_PATH so `playwright` resolves from the project's
-node_modules even though the script lives in /tmp:
-  NODE_PATH="<PROJECT_ROOT>/node_modules" node /tmp/verify-browser-<timestamp>.mjs
+2. NAVIGATE — `<browser-cmd> -s=<browser-session> goto <url>` if the item targets a
+   sub-path inferred from the checklist text.
 
-── STEP 3: HANDLE VAGUE ITEMS ─────────────────────────
-Same rule as curl pass: vague items → document inference, mark ASSUMED not PASS.
+3. ACT — drive the UI with the minimum command sequence needed to reach the state
+   described by the item. Common commands: `click`, `fill`, `press`, `select`,
+   `check`, `hover`. Every command emits the resulting page snapshot to stdout —
+   read that to find the next ref or to decide outcome.
 
-── STEP 4: ASYNC UI BEHAVIOURS ────────────────────────
-If a behaviour requires waiting (e.g. spinner resolves, toast appears):
-  - Poll with page.waitForSelector or page.waitForFunction up to <timeout> seconds.
-  - If not resolved within timeout: mark TIMEOUT — <what was waited for>.
+4. ASSERT — use the stdout snapshot from the last action, or take an explicit one
+   to a known file for grep-based checks:
+     <browser-cmd> -s=<browser-session> snapshot --filename=/tmp/snap-<n>.yml
+     grep -F '<expected text>' /tmp/snap-<n>.yml
+   For richer DOM checks use `eval` against the snapshot's refs or selectors.
 
-── STEP 5: CLEAN UP ───────────────────────────────────
-\```bash
-rm -f /tmp/verify-browser-<timestamp>.mjs
-\```
+5. SCREENSHOT — capture proof for the reviewer:
+     <browser-cmd> -s=<browser-session> screenshot --filename=<SCREENSHOT_DIR>/item-<n>.png || true
+   Track success per item. A screenshot failure must NOT change the item's status —
+   only the trailing `[screenshot: ...]` evidence tag is omitted on failure.
+
+── ASYNC UI BEHAVIOURS ────────────────────────────────
+   If an item requires waiting (spinner resolves, toast appears), poll by re-running
+   `snapshot` (or `eval`) up to <timeout> seconds with short sleeps between attempts.
+   If still unresolved: mark `TIMEOUT (browser)` — <what was waited for>.
+
+── VAGUE ITEMS ────────────────────────────────────────
+   Same rule as curl pass: vague items → document inference, mark
+   `ASSUMED (browser)` not `PASS (browser)`.
+
+── CLEANUP (once) ─────────────────────────────────────
+   <browser-cmd> -s=<browser-session> close
+   rm -f /tmp/snap-*.yml
 
 ═══════════════════════════════════════════════════════
 OUTPUT — your final output must be EXACTLY these rows
@@ -598,10 +616,9 @@ OUTPUT — your final output must be EXACTLY these rows
 EVERY status MUST be suffixed with " (browser)" so the orchestrator can
 distinguish browser-pass results from curl-pass results in Step 7.
 
-EVIDENCE COLUMN — when the script's screenshot capture for an item
-succeeded (`screenshotOk: true`), append a single trailing tag to the
-evidence text: ` [screenshot: item-<#>.png]` where `<#>` is the item
-number. Omit the tag only when capture errored (`screenshotOk: false`).
+EVIDENCE COLUMN — when screenshot capture for an item succeeded, append a
+single trailing tag to the evidence text: ` [screenshot: item-<#>.png]`
+where `<#>` is the item number. Omit the tag only when capture errored.
 ═══════════════════════════════════════════════════════
 
 | <#> | <item text, max 60 chars> | PASS (browser) | Heading "Create account" visible at /register [screenshot: item-<#>.png] |
@@ -622,7 +639,7 @@ number. Omit the tag only when capture errored (`screenshotOk: false`).
 - Fix agents MAY read the codebase — unlike the verification subagent, they need code context to fix bugs
 - Browser pass runs by default; `--no-browser` skips it
 - Browser pass re-verifies only `UNVERIFIABLE` items — never re-runs curl-verified results
-- Browser subagent has same code-isolation contract as the curl subagent; it may only write scripts to `/tmp`
+- Browser subagent has same code-isolation contract as the curl subagent; it drives `playwright-cli` only and may only write to `/tmp/` and `<SCREENSHOT_DIR>`
 - Browser-pass rows always carry a `(browser)` suffix on their status — preserve it through merge so Step 7 can detect them
 - Browser pass writes one PNG per re-checked item to `<checklist-dir>/<checklist-stem>-screenshots/item-<#>.png` (e.g. `.checklist/qa-1-screenshots/item-3.png`). Folder is created lazily by Step 5b-1 — absent when `--no-browser` skips the pass. Files inherit the existing `.checklist/` gitignore line. A failed screenshot capture must NOT change item status; the evidence cell simply omits the `[screenshot: ...]` tag
 - Do not run two `/verify` invocations against the same project simultaneously — both will try to auto-start the app and race on the port
