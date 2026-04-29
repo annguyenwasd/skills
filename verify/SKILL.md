@@ -2,7 +2,7 @@
 name: verify
 description: Verify that a running app's behaviour matches a checklist of expected outcomes. Auto-starts the app if it isn't running, spawns a fresh-context subagent (curl-only, no code access) to verify each item, then shuts the app down. Reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Invoke as /verify.
 model: opus
-argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>] [--fix] [--no-browser]"
+argument-hint: "[--checklist <path>] [--prd <number>] [--qa <number>] [--base-url <url>] [--timeout <seconds>] [--start-cmd <command>] [--fix] [--no-browser]"
 ---
 
 # /verify — Behavioural Verification
@@ -19,19 +19,21 @@ Parse from the invocation string:
 
 - `--checklist <path>` — path to checklist file (optional when `.checklist/` files exist — see auto-resolve below)
 - `--prd <number>` — use `.checklist/prd-<number>.md` (shorthand for PRD-backed checklists)
+- `--qa <number>` — use `.checklist/qa-<number>.md` (shorthand for QA-session checklists; triggers browser MCP pass automatically when checklist has `type: ui`)
 - `--base-url <url>` — base URL of the running app (default: `http://localhost:3000`)
 - `--timeout <seconds>` — max seconds to wait for async behaviours (default: 30)
 - `--start-cmd <command>` — override auto-detected start command
 - `--fix` — after verification, spawn a sequential TDD fix agent for each FAIL and TIMEOUT item; each agent opens a PR
 - `--no-browser` — skip the browser verification pass (by default, UNVERIFIABLE items are re-verified with Playwright if available)
 
-### Checklist auto-resolve (when `--checklist` and `--prd` are both absent)
+### Checklist auto-resolve (when `--checklist`, `--prd`, and `--qa` are all absent)
 
 ```bash
 CHECKLIST_DIR="$(git rev-parse --show-toplevel 2>/dev/null)/.checklist"
 [ -d "$CHECKLIST_DIR" ] || CHECKLIST_DIR="./.checklist"
 ```
 
+- If `--qa <N>`: use `$CHECKLIST_DIR/qa-<N>.md`. Abort if not found.
 - If `--prd <N>`: use `$CHECKLIST_DIR/prd-<N>.md`. Abort if not found.
 - If no flag: list `.md` files in `$CHECKLIST_DIR`, sorted by modification time descending.
   - Zero files → abort: `"No checklist found. Run /interview-me, /grill-me, or /write-a-prd first, or pass --checklist <path>."`
@@ -131,6 +133,21 @@ App failed to start within 30s. Check the start command output above for errors.
 Read the checklist file. Extract every distinct expected behaviour as an ordered list. Accept any format — numbered list, bullet list, checkbox list `[ ]`, prose paragraphs. Each sentence or item describing an observable outcome becomes one entry.
 
 Store as `CHECKLIST_ITEMS` (numbered, one per line).
+
+### 4a. Parse frontmatter (applies to all checklist sources)
+
+If the file starts with a `---` YAML block, parse the leading frontmatter:
+
+```bash
+awk '/^---$/{c++; next} c==1' <checklist-path>
+```
+
+Then evaluate `type:` (case-insensitive):
+
+- `type: ui`  → `CHECKLIST_UI=true`
+- anything else (or missing) → `CHECKLIST_UI=false`
+
+This applies regardless of how the checklist was selected (`--checklist`, `--prd`, `--qa`, or auto-resolve).
 
 ---
 
@@ -260,7 +277,45 @@ Skip entirely if:
 - `--no-browser` was passed
 - Zero `UNVERIFIABLE` items in the Step 5 report
 
-### 5b-1. Playwright availability check
+### 5b-1. Choose browser strategy
+
+**If `CHECKLIST_UI=true`** (checklist came from `/qa --qa <N>` with `type: ui` frontmatter):
+- Use the **browsermcp** MCP path (§5b-browsermcp). No Playwright needed.
+
+**Otherwise:**
+- Use the **Playwright** path (§5b-playwright).
+
+---
+
+### §5b-browsermcp — Browser MCP pass
+
+#### Availability check
+
+```bash
+claude mcp list 2>/dev/null | grep -E '^browsermcp:.*Connected' >/dev/null
+```
+
+If exit code ≠ 0: print the following and abort the browser pass (UNVERIFIABLE items remain as-is — do **not** fall back to Playwright; the user explicitly chose browser MCP for this UI checklist):
+
+```
+Browser MCP pass skipped: browsermcp MCP server not configured or not connected.
+Install with:
+  claude mcp add browsermcp -s user -- npx @browsermcp/mcp@latest
+Then verify:
+  claude mcp list | grep browsermcp
+```
+
+#### Spawn subagent
+
+Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using §verify-browsermcp-agent-prompt.
+
+Pass **only**: the UNVERIFIABLE items (numbered), the base URL, and the timeout. No codebase context, no git history, no other lines from the report.
+
+After the subagent returns → **5b-3. Merge results** (below).
+
+---
+
+### §5b-playwright — Playwright pass
 
 ```bash
 npx playwright --version 2>/dev/null
@@ -276,11 +331,13 @@ To enable browser verification, install it:
 
 Where `<pm>` is the package manager detected in §Step 3a (`pnpm`/`yarn`/`npm`). If §Step 3a did not run (app was already running when /verify started), re-detect: `pnpm-lock.yaml` → `pnpm add`; `yarn.lock` → `yarn add`; else → `npm install`. If no lock file: use `npm install`.
 
-### 5b-2. Spawn browser subagent
+Collect UNVERIFIABLE items. Spawn one `general-purpose` Agent (foreground) using §verify-browser-agent-prompt.
 
-Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using §verify-browser-agent-prompt.
+Pass **only**: the UNVERIFIABLE items (numbered), the base URL, and the timeout.
 
-Pass **only**: the UNVERIFIABLE items (numbered), the base URL, and the timeout. No codebase context, no git history, no other lines from the report.
+After the subagent returns → **5b-3. Merge results** (below).
+
+---
 
 ### 5b-3. Merge results
 
@@ -426,6 +483,80 @@ FINAL REPORT — last line must be EXACTLY one of:
   FIX_COMPLETE: <pr-url>
   FIX_FAILED: <one-sentence reason>
   FIX_NOT_NEEDED: <one-sentence reason>
+```
+
+---
+
+## §verify-browsermcp-agent-prompt
+
+```
+You are a browser-based behavioural verifier. A curl-only verification pass already ran
+and marked certain items UNVERIFIABLE. Your job: verify those items by controlling a
+real browser via the browsermcp MCP tools.
+
+You have NO access to the implementation code, git history, or PRD. You only know:
+1. The UNVERIFIABLE checklist items from the prior curl pass
+2. The app's base URL
+3. The browsermcp MCP tools available to you
+
+TOOL CONSTRAINTS — STRICT
+- Use ONLY tools exposed by the `browsermcp` MCP server for browser interaction. Tool
+  names typically appear as `mcp__browsermcp__<name>` (navigate, snapshot, click, type,
+  screenshot, wait_for, press_key, etc.). Do NOT assume exact names — at the start, list
+  the tools the server actually exposes and use those. If a needed capability is not
+  available, mark the item UNVERIFIABLE (browser) and explain.
+- Use Bash ONLY for shell expressions if needed to process text — no curl, no file reads.
+- DO NOT use Read, Grep, Glob, or Bash to access any project file.
+- DO NOT run: cat, ls, find, git, or read any source file.
+- Infer all navigation paths from checklist text alone. If a path cannot be inferred,
+  mark the item UNVERIFIABLE (browser) — do NOT read routes or components.
+
+═══════════════════════════════════════════════════════
+CONNECTION
+═══════════════════════════════════════════════════════
+BASE URL : <base-url>
+TIMEOUT  : <timeout> seconds
+
+═══════════════════════════════════════════════════════
+UNVERIFIABLE ITEMS TO RE-CHECK
+═══════════════════════════════════════════════════════
+<UNVERIFIABLE_ITEMS — original item numbers and full text>
+
+═══════════════════════════════════════════════════════
+HOW TO VERIFY — repeat for EACH item
+═══════════════════════════════════════════════════════
+
+── STEP 1: CLASSIFY ────────────────────────────────────
+Can this item be verified by controlling a browser (clicks, navigation, visible text,
+DOM state, form submission)? If still not verifiable even with a browser (e.g. email
+delivery, server-side-only state): mark UNVERIFIABLE — <reason>. Move to next item.
+
+── STEP 2: NAVIGATE ────────────────────────────────────
+Use browser_navigate to go to BASE URL (and sub-paths inferred from checklist text only).
+Infer navigation target from checklist text — do not read source files.
+
+── STEP 3: INSPECT ─────────────────────────────────────
+Use browser_snapshot to get the accessibility tree, or browser_screenshot to see the page.
+Interact as needed (browser_click, browser_type) to exercise the behaviour.
+
+── STEP 4: HANDLE VAGUE ITEMS ─────────────────────────
+Same rule as curl pass: vague items → document inference, mark ASSUMED not PASS.
+
+── STEP 5: ASYNC UI BEHAVIOURS ────────────────────────
+If a behaviour requires waiting (spinner resolves, toast appears):
+  - Poll with browser_wait_for or repeated browser_snapshot up to <timeout> seconds.
+  - If not resolved within timeout: mark TIMEOUT — <what was waited for>.
+
+═══════════════════════════════════════════════════════
+OUTPUT — your final output must be EXACTLY these rows
+(only for the items you were assigned — use original item numbers)
+═══════════════════════════════════════════════════════
+
+| <#> | <item text, max 60 chars> | PASS | Heading "Create account" visible at /register |
+| <#> | <...> | FAIL | Button disabled — expected enabled after valid input |
+| <#> | <...> | ASSUMED | "friendly message" inferred as non-empty visible text. Found ✓ |
+| <#> | <...> | TIMEOUT | Waited 30s for modal to close — still open |
+| <#> | <...> | UNVERIFIABLE (browser) | Cannot infer UI path from checklist text |
 ```
 
 ---

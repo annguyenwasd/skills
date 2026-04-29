@@ -63,16 +63,19 @@ Store as `MARKER_PREFIX` in context.
 Track bugs in context only — no files. Each bug:
 
 ```
-id:            integer (increment from 1)
-title:         kebab-style short title
-status:        queued | fixing | pending-review 🔍 | approved ✓ | failed ✗
-commitHash:    null | 40-char hash
-issueNumber:   null | integer
-failureReason: null | string
-branch:        null | string  (e.g. "fix-off-by-one-split"; set when bug starts fixing)
-testFilePath:  null | string  (set when agent reports test file used)
-rootCause:     null | string  (one sentence parsed from agent SUCCESS line)
-fixSummary:    null | string  (one sentence parsed from agent SUCCESS line)
+id:                integer (increment from 1)
+title:             kebab-style short title
+status:            queued | fixing | pending-review 🔍 | approved ✓ | failed ✗
+commitHash:        null | 40-char hash
+issueNumber:       null | integer
+failureReason:     null | string
+branch:            null | string  (e.g. "fix-off-by-one-split"; set when bug starts fixing)
+testFilePath:      null | string  (set when agent reports test file used)
+rootCause:         null | string  (one sentence parsed from agent SUCCESS line)
+fixSummary:        null | string  (one sentence parsed from agent SUCCESS line)
+expectedBehaviour: string         (set in Phase A — "what user wants", separated from actualBehaviour)
+actualBehaviour:   string         (set in Phase A — "what user observes before fix")
+uiFlag:            null | boolean (computed in §coordinator from full branch diff vs BASE_BRANCH)
 ```
 
 ---
@@ -85,7 +88,12 @@ Let the user describe in their own words. Ask **at most 2 short clarifying quest
 - Expected vs actual behavior
 - Steps to reproduce (if not obvious)
 
-If the description is clear, skip questions.
+After the description (and any clarifications) settles, **always derive and store two short fields** before spawning the agent — they drive the `/verify --qa <id>` checklist later:
+
+- `expectedBehaviour` — one or two sentences describing what the user wants to happen
+- `actualBehaviour` — one or two sentences describing what the user observes today
+
+If the user's description already separates them, copy verbatim. Otherwise, infer from context and confirm with one short echo: `"Got it — expected: <X>; actual: <Y>. Right?"`. If the user corrects, update the fields. Skip the echo only when both are unambiguous from the original description.
 
 ### 2. Generate slug, then either spawn agent or queue
 
@@ -196,6 +204,39 @@ If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`.
 
 - `SUCCESS: <hash> TEST:<testFilePath> ROOT_CAUSE:<rootCause> FIX_SUMMARY:<fixSummary>` (marker confirmed):
   - Set `status=pending-review`, store `commitHash`, `testFilePath`, `rootCause`, `fixSummary`
+  - **Compute `uiFlag`** from the *full branch diff* against `BASE_BRANCH` (not just the latest commit — re-fixes layer commits, and the answer must reflect everything the user has to manually verify):
+    ```bash
+    UI_HIT=$(git -C "$REPO_ROOT" diff --name-only "$BASE_BRANCH...<branch>" \
+      | grep -E '\.(tsx|jsx|vue|svelte|html|css|scss|sass|less|astro)$|(^|/)(component|page|view|screen|layout|widget)s?(/|\.|-|_)' \
+      | head -1)
+    [ -n "$UI_HIT" ] && uiFlag=true || uiFlag=false
+    ```
+    Store `uiFlag` on the bug record.
+  - Write checklist file (overwrite if exists):
+    ```bash
+    CHECKLIST_DIR="$(git -C "$REPO_ROOT" rev-parse --show-toplevel)/.checklist"
+    mkdir -p "$CHECKLIST_DIR"
+    ```
+    Write `$CHECKLIST_DIR/qa-<id>.md` using stored fields (`expectedBehaviour`, `actualBehaviour` from Phase A; `fixSummary` from agent; `type` from `uiFlag`):
+    ```markdown
+    ---
+    qa-id: <id>
+    type: <ui if uiFlag=true, else api>
+    ---
+
+    ## Expected behaviour
+
+    <expectedBehaviour>
+
+    ## Actual behaviour (before fix)
+
+    <actualBehaviour>
+
+    ## Fix summary
+
+    <fixSummary>
+    ```
+    Print: `Checklist written: .checklist/qa-<id>.md — verify with: /verify --qa <id>`
   - Call `AskUserQuestion`:
     ```
     question: "#<id> `<title>` ready.\n\nRoot cause: <rootCause>\nFix: <fixSummary>\n\nMerge into `<BASE_BRANCH>`?"
