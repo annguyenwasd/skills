@@ -22,7 +22,7 @@ Parse from the invocation string:
 - `--qa <number>` — use `.checklist/qa-<number>.md` (shorthand for QA-session checklists; equivalent to `--checklist .checklist/qa-<number>.md`)
 - `--base-url <url>` — base URL of the running app (default: `http://localhost:3000`). Trailing `/` stripped before use.
 - `--timeout <seconds>` — max seconds to wait for async behaviours (default: 30). Must be a positive integer ≤ 600.
-- `--ready-timeout <seconds>` — max seconds to wait for the app to become reachable in §Step 3c (default: 30). Must be a positive integer ≤ 600.
+- `--ready-timeout <seconds>` — max seconds to wait for the app to become reachable in Step 3c (default: 30). Must be a positive integer ≤ 600.
 - `--start-cmd <command>` — override auto-detected start command
 - `--fix` — after verification, spawn a sequential TDD fix agent for each FAIL and TIMEOUT item; each agent opens a PR
 - `--no-browser` — skip the browser verification pass (by default, UNVERIFIABLE items are re-verified with Playwright)
@@ -68,9 +68,9 @@ curl -s -o /dev/null --max-time 5 "<base-url>"
 # exit 0 = already running; non-zero = not running
 ```
 
-**If already running:** set `APP_STARTED_BY_VERIFY=false`. Skip to §Step 4.
+**If already running:** set `APP_STARTED_BY_VERIFY=false`. Skip to Step 4.
 
-**If not running:** proceed to §Step 3 (auto-start).
+**If not running:** proceed to Step 3 (auto-start).
 
 ---
 
@@ -292,7 +292,7 @@ npx playwright --version 2>/dev/null
 node -e "require('playwright').chromium.executablePath()" 2>/dev/null
 ```
 
-If either check fails: print the following warning, then continue to §Step 6 (UNVERIFIABLE items remain as-is):
+If either check fails: print the following warning, then continue to Step 6 (UNVERIFIABLE items remain as-is):
 
 ```
 Browser pass skipped: Playwright not fully installed.
@@ -300,15 +300,15 @@ To enable browser verification, install both the package and the chromium binary
   <pm> add -D playwright && npx playwright install chromium
 ```
 
-Where `<pm>` is the package manager detected in §Step 3a (`pnpm`/`yarn`/`npm`). If §Step 3a did not run (app was already running when /verify started), re-detect: `pnpm-lock.yaml` → `pnpm add`; `yarn.lock` → `yarn add`; else → `npm install`. If no lock file: use `npm install`.
+Where `<pm>` is the package manager detected in Step 3a (`pnpm`/`yarn`/`npm`). If Step 3a did not run (app was already running when /verify started), re-detect: `pnpm-lock.yaml` → `pnpm add`; `yarn.lock` → `yarn add`; else → `npm install`. If no lock file: use `npm install`.
 
 Record the project root (`git rev-parse --show-toplevel`, falling back to `pwd`) as `PROJECT_ROOT` — the browser subagent will need it to resolve the `playwright` module from `/tmp`.
 
 ### 5b-2. Spawn subagent
 
-Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using §verify-browser-agent-prompt.
+Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using verify-browser-agent-prompt.
 
-Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, and `PROJECT_ROOT` (from §5b-1, needed for module resolution). No codebase context, no git history, no other lines from the report.
+Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, and `PROJECT_ROOT` (from 5b-1, needed for module resolution). No codebase context, no git history, no other lines from the report.
 
 After the subagent returns → **5b-3. Merge results** (below).
 
@@ -319,9 +319,9 @@ After the subagent returns → **5b-3. Merge results** (below).
 After the subagent returns:
 - For every item the subagent returned a row for: replace the corresponding UNVERIFIABLE row in the Step 5 report table with the new row.
 - For every UNVERIFIABLE item the subagent did **not** return a row for (crash, malformed output, omission): leave the row as `UNVERIFIABLE` and set its evidence to `browser pass returned no result for this item`.
-- Browser-pass rows are emitted with a `(browser)` suffix on every status (e.g. `PASS (browser)`, `FAIL (browser)`) — preserve the suffix verbatim so §Step 7 can detect them.
+- Browser-pass rows are emitted with a `(browser)` suffix on every status (e.g. `PASS (browser)`, `FAIL (browser)`) — preserve the suffix verbatim so Step 7 can detect them.
 - Recompute all Summary counts (the suffix does not change which bucket a row falls into — `PASS (browser)` still counts as PASS).
-- In §Step 6, print the merged report (not the original Step 5 report).
+- In Step 6, print the merged report (not the original Step 5 report).
 
 ---
 
@@ -355,7 +355,7 @@ Parse FAIL and TIMEOUT items from the merged report (status cells `FAIL`, `TIMEO
 1. Derive a branch slug: lowercase kebab of first 6 words of item text, prefixed `verify-fix/`  
    (e.g. `verify-fix/post-orders-invalid-payload-returns-400`)
 2. Determine `BROWSER_ITEM`: `true` if the item's status cell ends in `(browser)`, else `false`. The fix-agent prompt short-circuits when `BROWSER_ITEM=true` (auto-fix not supported for browser-verified items).
-3. Spawn a foreground `general-purpose` Agent using §verify-fix-agent-prompt
+3. Spawn a foreground `general-purpose` Agent using verify-fix-agent-prompt
 4. Wait for completion before starting the next item
 
 After all fix agents complete, print:
@@ -369,7 +369,7 @@ Fix summary:
 
 ---
 
-## §verify-fix-agent-prompt
+## verify-fix-agent-prompt
 
 ```
 You are a fix agent. One behavioural verification item failed. Make it pass using strict TDD.
@@ -465,7 +465,7 @@ FINAL REPORT — last line must be EXACTLY one of:
 
 ---
 
-## §verify-browser-agent-prompt
+## verify-browser-agent-prompt
 
 ```
 You are a browser-based behavioural verifier. A curl-only verification pass already ran
@@ -539,7 +539,7 @@ OUTPUT — your final output must be EXACTLY these rows
 (only for the items you were assigned — use original item numbers)
 
 EVERY status MUST be suffixed with " (browser)" so the orchestrator can
-distinguish browser-pass results from curl-pass results in §Step 7.
+distinguish browser-pass results from curl-pass results in Step 7.
 ═══════════════════════════════════════════════════════
 
 | <#> | <item text, max 60 chars> | PASS (browser) | Heading "Create account" visible at /register |
@@ -561,5 +561,5 @@ distinguish browser-pass results from curl-pass results in §Step 7.
 - Browser pass runs by default; `--no-browser` skips it
 - Browser pass re-verifies only `UNVERIFIABLE` items — never re-runs curl-verified results
 - Browser subagent has same code-isolation contract as the curl subagent; it may only write scripts to `/tmp`
-- Browser-pass rows always carry a `(browser)` suffix on their status — preserve it through merge so §Step 7 can detect them
+- Browser-pass rows always carry a `(browser)` suffix on their status — preserve it through merge so Step 7 can detect them
 - Do not run two `/verify` invocations against the same project simultaneously — both will try to auto-start the app and race on the port

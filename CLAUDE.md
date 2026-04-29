@@ -73,6 +73,12 @@ For multi-step tasks, state a brief plan:
 
 Strong success criteria let you loop independently. Weak criteria ("make it work") require constant clarification.
 
+## 5. Skill-authoring conventions
+
+When editing or creating SKILL.md files in this repo:
+
+- Never use `§` (or any non-ASCII anchor character) to mark named sections or cross-references. Use plain heading text and refer to sections by their bare name (`coordinator`, `Step 4`, `agent-prompt`). Surrounding prose carries the meaning.
+
 ---
 
 **These guidelines are working if:** fewer unnecessary changes in diffs, fewer rewrites due to overcomplication, and clarifying questions come before implementation rather than after mistakes.

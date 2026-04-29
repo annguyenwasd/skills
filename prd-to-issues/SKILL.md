@@ -39,7 +39,7 @@ Slices may be 'HITL' or 'AFK'. HITL slices require human interaction, such as an
 
 For each slice, determine `uiInvolved`: set to `true` if the slice description, acceptance criteria, or user stories reference any of: page, screen, component, form, dialog, modal, table, button, chart, dashboard, UI, frontend, view, layout. Otherwise `false`.
 
-### 3.5. §gap-check
+### 3.5. gap-check
 
 Perform automated coverage analysis before presenting slices to the user.
 
@@ -67,7 +67,7 @@ Render a supplemental DAG **only** when it shows structure invisible in the exec
 
 Present to the user in this order:
 
-**1. Gap report** (only if any REQs have empty coverage from §gap-check):
+**1. Gap report** (only if any REQs have empty coverage from gap-check):
 
 ```
 ⚠ COVERAGE GAPS — N requirements unaddressed:

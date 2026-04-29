@@ -44,7 +44,7 @@ Probe for the command agents will use:
 4. Else if `Cargo.toml`                            → `TEST_CMD="cargo test"`
 5. Else → ask user: *"What command runs your tests?"* — store their answer.
 
-Store `TEST_CMD` in context. Pass into §agent-prompt.
+Store `TEST_CMD` in context. Pass into agent-prompt.
 
 ### Detect test marker syntax
 
@@ -75,7 +75,7 @@ rootCause:         null | string  (one sentence parsed from agent SUCCESS line)
 fixSummary:        null | string  (one sentence parsed from agent SUCCESS line)
 expectedBehaviour: string         (set in Phase A — "what user wants", separated from actualBehaviour)
 actualBehaviour:   string         (set in Phase A — "what user observes before fix")
-uiFlag:            null | boolean (computed in §coordinator from full branch diff vs BASE_BRANCH)
+uiFlag:            null | boolean (computed in coordinator from full branch diff vs BASE_BRANCH)
 ```
 
 ---
@@ -134,7 +134,7 @@ If **no other bug** has `status` in `{fixing, pending-review}`, this bug starts 
 git -C "$REPO_ROOT" checkout -b "$SLUG" "$BASE_BRANCH"
 ```
 
-Spawn the explore+fix agent (`run_in_background: true`, `subagent_type: general-purpose`) using the §agent-prompt template with `WORK_DIR=$REPO_ROOT`. Substitute `TEST_CMD` and `MARKER_PREFIX` from session context. Set `status=fixing`. Print: `#<id> <title> — explore+fix agent started on branch $SLUG.`
+Spawn the explore+fix agent (`run_in_background: true`, `subagent_type: general-purpose`) using the agent-prompt template with `WORK_DIR=$REPO_ROOT`. Substitute `TEST_CMD` and `MARKER_PREFIX` from session context. Set `status=fixing`. Print: `#<id> <title> — explore+fix agent started on branch $SLUG.`
 
 Otherwise (an agent is already running or a fix is awaiting review), queue this bug:
 
@@ -161,19 +161,19 @@ Exactly one agent runs at a time; additional bugs sit in the `queued` column unt
 
 ## Phase B — Wait for completion (fires when user says "done")
 
-There is at most one running agent; the table will show queued bugs that have not started yet. Each time an active bug resolves, §coordinator drains the queue (see §coordinator below).
+There is at most one running agent; the table will show queued bugs that have not started yet. Each time an active bug resolves, coordinator drains the queue (see coordinator below).
 
 ### Step 1 — Acknowledge
 
 Print the full bug table, then say `Agent(s) running — results will arrive as notifications.`
 
-**Do NOT poll.** Background agents emit a notification on completion; that notification is delivered as the next user turn. Process each as it arrives via §coordinator and reprint the updated table.
+**Do NOT poll.** Background agents emit a notification on completion; that notification is delivered as the next user turn. Process each as it arrives via coordinator and reprint the updated table.
 
 If the user does NOT speak and no notification arrives within ~30 minutes of "done", check stuck agents with `TaskList`. For any agent in `running` state past 30 min, mark its bug `failed` with `failureReason="Agent timed out"` and call `TaskStop`. (Queued bugs are not running, so this sweep ignores them — they will be picked up by the queue drain after the timeout failure is recorded.)
 
 ### Step 2 — Continue accepting user input
 
-After "done", approval is driven by `AskUserQuestion` in §coordinator — no need to type "approve". Still accept:
+After "done", approval is driven by `AskUserQuestion` in coordinator — no need to type "approve". Still accept:
 - Free-form description targeting a `pending-review` `#<id>` → re-fix flow (fallback if AskUserQuestion is not yet visible).
 - New bug description (no `#<id>` reference) → reject: *"Session is closing — new bugs after 'done' are not accepted. Start a new QA session."*
 
@@ -181,9 +181,9 @@ Session ends only once every bug is `approved` or `failed`. Then run Phase D.
 
 ---
 
-## §coordinator — processing agent results
+## coordinator — processing agent results
 
-> **Invariant.** Every transition to `approved` or `failed` — anywhere in this spec, including all four failure sites in §merge-flow — MUST invoke the queue-drain check below before yielding control. This is the only mechanism that starts queued bugs.
+> **Invariant.** Every transition to `approved` or `failed` — anywhere in this spec, including all four failure sites in merge-flow — MUST invoke the queue-drain check below before yielding control. This is the only mechanism that starts queued bugs.
 
 ### TDD enforcement check
 
@@ -246,12 +246,12 @@ If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`.
       - label: "Verify"  description: "Run /verify --qa <id> against bug branch, then re-prompt"
       - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
     ```
-  - If "Merge" → run **§merge-flow**
-  - If "Verify" → run **§verify-flow**
+  - If "Merge" → run **merge-flow**
+  - If "Verify" → run **verify-flow**
   - If "Re-fix" / Other (user typed feedback) → run **re-fix flow** (see Phase C)
-  - **Tie-breaker** (applies to **every** `AskUserQuestion` in §coordinator, §verify-flow, and §merge-flow). If the user types a free-form description targeting `#<id>` while a prompt is open, the harness routes it as the `Other` answer (typed feedback). Treat `Other` as the closest re-fix-shaped option on the current prompt: **Re-fix** on the post-success and post-verify-pass prompts, **Re-fix** on the post-verify-fail prompt, **Cancel→Re-fix** on the tooling/error prompts (treat the typed text as a re-fix request), **Still broken** on the post-merge prompt. The `pending-review` → `fixing` transition happens once, not twice.
-- `FAILED: <reason>` → `status=failed`, failureReason=reason. Then run §coordinator queue-drain.
-- `TDD_SKIPPED: <reason>` → `status=failed`, failureReason=`TDD skipped: <reason>` **(hard fail, never retry)**. Then run §coordinator queue-drain.
+  - **Tie-breaker** (applies to **every** `AskUserQuestion` in coordinator, verify-flow, and merge-flow). If the user types a free-form description targeting `#<id>` while a prompt is open, the harness routes it as the `Other` answer (typed feedback). Treat `Other` as the closest re-fix-shaped option on the current prompt: **Re-fix** on the post-success and post-verify-pass prompts, **Re-fix** on the post-verify-fail prompt, **Cancel→Re-fix** on the tooling/error prompts (treat the typed text as a re-fix request), **Still broken** on the post-merge prompt. The `pending-review` → `fixing` transition happens once, not twice.
+- `FAILED: <reason>` → `status=failed`, failureReason=reason. Then run coordinator queue-drain.
+- `TDD_SKIPPED: <reason>` → `status=failed`, failureReason=`TDD skipped: <reason>` **(hard fail, never retry)**. Then run coordinator queue-drain.
 
 ### Drain the queue
 
@@ -266,7 +266,7 @@ if no other bug has status in {fixing, pending-review}:
   [ -z "$(git -C "$REPO_ROOT" status --porcelain)" ] || abort "Working tree dirty in $REPO_ROOT — resolve before draining queue."
   git -C "$REPO_ROOT" checkout "$BASE_BRANCH"
   git -C "$REPO_ROOT" checkout -b "<branch>" "$BASE_BRANCH"
-  spawn explore+fix agent (run_in_background: true) using §agent-prompt with WORK_DIR=$REPO_ROOT
+  spawn explore+fix agent (run_in_background: true) using agent-prompt with WORK_DIR=$REPO_ROOT
   set its status=fixing
   print: "#<id> <title> — agent started (queue drained)."
 ```
@@ -275,7 +275,7 @@ The re-fix flow (Phase C) does **not** drain the queue: re-fix sets the bug back
 
 ---
 
-## §agent-prompt
+## agent-prompt
 
 ```
 You are an explore+fix agent. Fix exactly one bug using strict TDD.
@@ -357,9 +357,9 @@ Never push to remote.
 
 ---
 
-## §verify-flow — run /verify and re-prompt for merge
+## verify-flow — run /verify and re-prompt for merge
 
-Called from §coordinator when the user picks **Verify** on a `pending-review`
+Called from coordinator when the user picks **Verify** on a `pending-review`
 bug. Bug stays in `pending-review` for the entire flow. The bug branch is
 already checked out in the main repo.
 
@@ -367,7 +367,7 @@ already checked out in the main repo.
 
 - `verifyStatus` ∈ `{not-run, pass, fail, error}` — default `not-run`.
 - `verifyReport` — full text from the most recent /verify run (used to
-  compose re-fix feedback in §verify-feedback).
+  compose re-fix feedback in verify-feedback).
 
 **Step 1 — Print progress and confirm branch checkout.**
 
@@ -382,7 +382,7 @@ Do **not** use `Skill(skill="verify")` — the harness rejects nested skill
 invocations while /qa is running. Spawn a foreground `general-purpose`
 Agent that follows verify's SKILL.md instructions with `--qa <id>`. Block
 on completion. Capture stdout as `VERIFY_REPORT` and store on the bug
-record's `verifyReport`. Use **§verify-invoke-prompt**.
+record's `verifyReport`. Use **verify-invoke-prompt**.
 
 **Step 3 — Classify the run.**
 
@@ -426,7 +426,7 @@ options:
   - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
 ```
 
-- "Merge" → §merge-flow.
+- "Merge" → merge-flow.
 - "Re-fix" / Other → re-fix flow (Phase C).
 
 **4b · `classification == fail`** — at least one real FAIL/TIMEOUT/non-tooling
@@ -442,9 +442,9 @@ options:
 ```
 
 - "Re-fix" / Other → re-fix flow (Phase C) with composite feedback (see
-  **§verify-feedback**).
-- "Merge anyway" → §merge-flow.
-- "Verify again" → loop to §verify-flow Step 1. No hard cap; document the
+  **verify-feedback**).
+- "Merge anyway" → merge-flow.
+- "Verify again" → loop to verify-flow Step 1. No hard cap; document the
   cost in the option description above.
 
 **4c · `classification == tooling`** — every remaining failure is
@@ -462,8 +462,8 @@ options:
 - "Show install hint" → echo the lines from `VERIFY_REPORT` between
   `Browser (MCP|pass) skipped:` and the next blank line, then re-prompt
   with the same options.
-- "Merge anyway" → §merge-flow.
-- "Cancel" → return to the §coordinator post-success prompt
+- "Merge anyway" → merge-flow.
+- "Cancel" → return to the coordinator post-success prompt
   (Merge / Verify / Re-fix) without re-running verify.
 - "Other" (typed feedback) → treat as Cancel + Re-fix: store typed text as
   re-fix feedback and run re-fix flow (Phase C).
@@ -485,14 +485,14 @@ Routing analogous to 4c.
 foreground and the orchestrator is blocked. Any user message typed during
 this window is delivered after the Agent returns; route it as `Other` on
 whichever post-verify prompt opens next (per the generalised tie-breaker
-in §coordinator).
+in coordinator).
 
 ---
 
-## §verify-feedback — composing the re-fix feedback string
+## verify-feedback — composing the re-fix feedback string
 
 When "Re-fix" / Other is picked from a post-verify-fail prompt (4b), build
-the §agent-prompt RE-FIX NOTE `User feedback:` line as:
+the agent-prompt RE-FIX NOTE `User feedback:` line as:
 
 ```
 Verify reported failures (from /verify --qa <id>):
@@ -508,7 +508,7 @@ result table instead.
 
 ---
 
-## §verify-invoke-prompt — prompt for the verify-runner Agent
+## verify-invoke-prompt — prompt for the verify-runner Agent
 
 ```
 You are running the /verify skill non-interactively for /qa.
@@ -530,9 +530,9 @@ Constraints:
 
 ---
 
-## §merge-flow — merge + post-merge confirmation
+## merge-flow — merge + post-merge confirmation
 
-Called from §coordinator when user picks "Merge" on a `pending-review` bug.
+Called from coordinator when user picks "Merge" on a `pending-review` bug.
 
 **Step 1 — Rebase onto `BASE_BRANCH`:**
 
@@ -548,9 +548,9 @@ git rebase "$REBASE_TARGET"
 ```bash
 git rebase --abort
 ```
-→ `status=failed`, `failureReason="Rebase conflict — manual resolution required"`. Then run §coordinator queue-drain.
+→ `status=failed`, `failureReason="Rebase conflict — manual resolution required"`. Then run coordinator queue-drain.
 
-After a successful rebase, run `<TEST_CMD>`. Fail → `status=failed`, `failureReason="Regression after rebase"`. Then run §coordinator queue-drain.
+After a successful rebase, run `<TEST_CMD>`. Fail → `status=failed`, `failureReason="Regression after rebase"`. Then run coordinator queue-drain.
 
 ---
 
@@ -567,7 +567,7 @@ git -C "$REPO_ROOT" merge --ff-only "<branch>" || {
   # Fast-forward merge failed — base branch advanced.
   # Mark this bug failed; let the next take over.
   status=failed; failureReason="Fast-forward merge failed — base advanced; rebase #<id> again."
-  # Then run §coordinator queue-drain.
+  # Then run coordinator queue-drain.
 }
 ```
 
@@ -589,13 +589,13 @@ options:
   ```bash
   git -C "$REPO_ROOT" branch -D <branch> 2>/dev/null || true
   ```
-  Set `status=approved`. Print: `#<id> <title> — merged and confirmed ✓`. Then run the queue-drain step from §coordinator.
+  Set `status=approved`. Print: `#<id> <title> — merged and confirmed ✓`. Then run the queue-drain step from coordinator.
 
 - If "Still broken" / Other (user typed feedback):
   - `status=fixing`
   - Re-checkout `<branch>` in the main repo: `git -C "$REPO_ROOT" checkout <branch>`.
-  - Spawn new explore+fix agent (`run_in_background: true`) on the **same branch** using §agent-prompt with RE-FIX NOTE (see Phase C). `WORK_DIR=$REPO_ROOT`.
-  - When agent completes → back to §coordinator (same flow: AskUserQuestion merge? → §merge-flow → post-merge confirmation).
+  - Spawn new explore+fix agent (`run_in_background: true`) on the **same branch** using agent-prompt with RE-FIX NOTE (see Phase C). `WORK_DIR=$REPO_ROOT`.
+  - When agent completes → back to coordinator (same flow: AskUserQuestion merge? → merge-flow → post-merge confirmation).
 
 ---
 
@@ -609,7 +609,7 @@ User is not satisfied — they describe what's still wrong. Re-fix on the **same
 
 1. Set `status=fixing`
 2. Ensure the bug branch is checked out in the main repo: `git -C "$REPO_ROOT" checkout <branch>`.
-3. Spawn a new explore+fix agent (`run_in_background: true`) using §agent-prompt with `WORK_DIR=$REPO_ROOT`, plus the additional context:
+3. Spawn a new explore+fix agent (`run_in_background: true`) using agent-prompt with `WORK_DIR=$REPO_ROOT`, plus the additional context:
 
 ```
 RE-FIX NOTE: A previous fix was committed on this branch but did not satisfy the user.
@@ -653,7 +653,7 @@ BUGS APPROVED AND MERGED:
 
 The `Verify` column echoes the bug record's `verifyStatus`
 (`pass | fail | error | not-run`); `not-run` means the user merged without
-picking the Verify option in §coordinator or §verify-flow.
+picking the Verify option in coordinator or verify-flow.
 
 BUGS THAT DID NOT PASS:
 ──────────────────────────────────────────────────────────────
@@ -702,7 +702,7 @@ For each bug with `status: failed`:
 
 ### Cleanup branches
 
-Approved bugs already had their branch removed in §merge-flow. Here we clean up **failed** bugs (left in place for inspection until summary), but selectively — failures where the fix itself was valid (rebase conflict, regression after rebase, ff-only failure) keep their branch so the user can investigate or recover the work; failures where no usable fix exists (`TDD skipped`, agent `FAILED`, agent timed out) drop the branch.
+Approved bugs already had their branch removed in merge-flow. Here we clean up **failed** bugs (left in place for inspection until summary), but selectively — failures where the fix itself was valid (rebase conflict, regression after rebase, ff-only failure) keep their branch so the user can investigate or recover the work; failures where no usable fix exists (`TDD skipped`, agent `FAILED`, agent timed out) drop the branch.
 
 Failure reason → keep branch?
 

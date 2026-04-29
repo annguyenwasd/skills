@@ -104,13 +104,13 @@ Extract the UI block from `PRD_BODY`:
 
 Generate `PRD_SLUG`: lowercase 4–5 word kebab from title. Example: "Invoice Management System v2" → `invoice-mgmt-v2`
 
-**Resume check:** If `./ship-it-<PRD_SLUG>.json` exists and `--prd` is omitted, offer to resume (§resume).
+**Resume check:** If `./ship-it-<PRD_SLUG>.json` exists and `--prd` is omitted, offer to resume (resume).
 
 ---
 
 ## Phase 1 — DAG generation
 
-**Apply prd-to-issues §3 (Draft vertical slices), §3.5 (gap-check), §3.6 (supplemental flows), and §4 (quiz the user)** against `PRD_BODY`. Use the same vertical-slice rules, `uiInvolved` heuristic, and gap-coverage logic — do not restate them here.
+**Apply prd-to-issues 3 (Draft vertical slices), 3.5 (gap-check), 3.6 (supplemental flows), and 4 (quiz the user)** against `PRD_BODY`. Use the same vertical-slice rules, `uiInvolved` heuristic, and gap-coverage logic — do not restate them here.
 
 Ship-it adds the following per-task fields beyond what prd-to-issues produces:
 
@@ -123,7 +123,7 @@ uiBlock:            prdUiBlock when uiInvolved == true AND prdUiBlock != null, e
 uiMockupUrl:        prdMockupUrl when uiInvolved == true AND prdUiBlock == null AND prdMockupUrl != null, else null (legacy)
 ```
 
-After §4 user approval, compute **execution waves**:
+After 4 user approval, compute **execution waves**:
 
 - Wave 0: `blockedBy = []`
 - Wave N: every blocker is in waves 0..N-1
@@ -131,11 +131,11 @@ After §4 user approval, compute **execution waves**:
 
 Store `coverageMap` and `supplementalDag` (`null | "screen" | "process"` plus nodes/edges) in the JSON sidecar.
 
-**If `--dry-run`:** render §dry-run-output and STOP.
+**If `--dry-run`:** render dry-run-output and STOP.
 
 ---
 
-## §dry-run-output
+## dry-run-output
 
 Render the DAG as ASCII inside a fenced plain code block (no ` ```mermaid `). Use box-drawing characters for wave containers and an explicit edge list below for dependencies. Keep it copy-pasteable into a terminal.
 
@@ -179,7 +179,7 @@ Rendering rules:
 - If a wave contains only one task, keep the same box — label it "(serial)" in the header instead of "(parallel)".
 - Box width is cosmetic; 62 chars works well for most titles. Truncate long titles with `…` at 50 chars inside the box.
 
-If `supplementalDag` is set (from §1b.6), render it after the edges section:
+If `supplementalDag` is set (from 1b.6), render it after the edges section:
 
 Screen-flow format:
 ```
@@ -317,7 +317,7 @@ Record the real GitHub issue number for each task. Update `blockedByIssues` in t
 
 ### 3a. Write JSON sidecar
 
-Write `./ship-it-<PRD_SLUG>.json` with all task data (see §session-state schema above).
+Write `./ship-it-<PRD_SLUG>.json` with all task data (see session-state schema above).
 
 ### 3b. Write Markdown dashboard
 
@@ -370,7 +370,7 @@ Ready = `status: pending` AND all tasks in `blockedBy` have `status: done`.
 
 On first run this is Wave 0.
 
-### 5b. Run HITL gate for any HITL tasks in ready set (§Phase 4)
+### 5b. Run HITL gate for any HITL tasks in ready set (Phase 4)
 
 ### 5c. Create worktrees — SEQUENTIAL (one at a time, no parallelism here)
 
@@ -396,11 +396,11 @@ Do NOT launch one, wait, then launch another.
 
 Update each launched task: `status = in-progress`, update GitHub label, update JSON, update dashboard.
 
-Use §task-agent-prompt for each agent, filling in the task-specific values.
+Use task-agent-prompt for each agent, filling in the task-specific values.
 
 ---
 
-## §task-agent-prompt
+## task-agent-prompt
 
 ```
 You are a ship-it task agent. Implement one GitHub issue using strict TDD, then open a PR.
@@ -429,11 +429,11 @@ Explore the codebase in <worktreePath>:
   - Conventions: naming, file structure, import style
   - Any UBIQUITOUS_LANGUAGE.md
   - If any acceptance criterion involves schema changes (columns, tables, indexes,
-    constraints, enum values): apply §migration-tdd instead of standard RED for those criteria.
+    constraints, enum values): apply migration-tdd instead of standard RED for those criteria.
 
 Note the test runner command. Use it exactly in subsequent steps.
 
-── §api-error-coverage (when issue body contains "## API errors to cover" AND uiInvolved == true) ──
+── api-error-coverage (when issue body contains "## API errors to cover" AND uiInvolved == true) ──
 
   a) If the issue has a populated ## API errors to cover table: extract every row.
      Each row gives: error string, i18n key, EN message, VI message. Go to step (c).
@@ -510,10 +510,10 @@ Apply SOLID where trivially obvious. Do NOT speculate about future requirements.
 Re-run full suite. Must still pass.
 If suite fails after refactor: revert the refactor changes.
 
-── §api-error-coverage TDD PASS (only when §api-error-coverage ran above) ──────
+── api-error-coverage TDD PASS (only when api-error-coverage ran above) ──────
 
 After all standard acceptance criteria are green, run one additional RED→GREEN cycle per
-error string from §api-error-coverage:
+error string from api-error-coverage:
 
   RED: Mock the API to return { status: N, data: { error: 'errorString' } }.
        Assert the component displays the text resolved by t('i18nKey').
@@ -608,7 +608,7 @@ You will be notified when each background agent completes. Process them as they 
 
 Read the last line of the agent's output:
 
-- `TASK_COMPLETE: <pr-url>` → validate marker (§6b), then `status = pr-open`, store `prUrl`
+- `TASK_COMPLETE: <pr-url>` → validate marker (6b), then `status = pr-open`, store `prUrl`
 - `TASK_FAILED: TDD_SKIPPED — <reason>` → `status = failed`, `failureReason = reason`. **No retry.** If `worktreePath` is set, remove it:
   ```bash
   git -C "$REPO_ROOT" worktree remove <worktreePath> --force 2>/dev/null || true
@@ -638,8 +638,8 @@ If marker is missing and agent reported `TASK_COMPLETE` → treat as `TASK_FAILE
 gh pr checks <prUrl> --json name,state,conclusion
 ```
 
-- All `conclusion = success` → `status = ci-pass`; proceed to §6e (merge + unlock)
-- Any `conclusion = failure` → extract logs (§ci-fix), spawn fix agent
+- All `conclusion = success` → `status = ci-pass`; proceed to 6e (merge + unlock)
+- Any `conclusion = failure` → extract logs (ci-fix), spawn fix agent
 - Still pending → wait for next poll
 
 ### 6d. PR review polling (every POLL minutes, for each `pr-open` or `ci-pass` task)
@@ -648,8 +648,8 @@ gh pr checks <prUrl> --json name,state,conclusion
 gh pr view <prUrl> --json reviews,comments,reviewDecision
 ```
 
-- `reviewDecision = APPROVED` and `ciStatus = pass` → merge (§6e)
-- `reviewDecision = CHANGES_REQUESTED` or unresolved comments → spawn review-fix agent (§review-fix)
+- `reviewDecision = APPROVED` and `ciStatus = pass` → merge (6e)
+- `reviewDecision = CHANGES_REQUESTED` or unresolved comments → spawn review-fix agent (review-fix)
 - `reviewDecision = REVIEW_REQUIRED` with no feedback → keep polling
 
 Update dashboard after each poll cycle even if nothing changed (to show current timestamp).
@@ -674,11 +674,11 @@ After merge:
    ```
 5. Update JSON and dashboard
 6. Check for newly unblocked tasks: tasks where `status = pending` AND all `blockedBy` tasks are `done`
-7. If newly unblocked tasks exist → run HITL gate if needed → create worktrees → **launch all in ONE message** (§Phase 5)
+7. If newly unblocked tasks exist → run HITL gate if needed → create worktrees → **launch all in ONE message** (Phase 5)
 
 ---
 
-## §ci-fix — CI failure agent
+## ci-fix — CI failure agent
 
 When CI fails on a PR, extract logs:
 
@@ -731,7 +731,7 @@ After completion:
 
 ---
 
-## §review-fix — PR review comment agent
+## review-fix — PR review comment agent
 
 When PR has unresolved change requests:
 
@@ -784,7 +784,7 @@ After completion:
 
 ---
 
-## §migration-tdd — TDD for DB schema changes
+## migration-tdd — TDD for DB schema changes
 
 When a task's acceptance criteria involve a schema change (new column, table, index, constraint, enum value), apply this pattern instead of writing a unit test against non-existent code.
 
@@ -815,7 +815,7 @@ Mark with `// ship-it:#<issueNumber>` on the line immediately above.
 
 ---
 
-## §resume — Resume from existing JSON
+## resume — Resume from existing JSON
 
 When `./ship-it-<PRD_SLUG>.json` exists:
 
@@ -844,8 +844,8 @@ On resume:
   Set `worktreePath = null` in JSON for each cleaned task. Write updated JSON.
 - For `in-progress` tasks: check if worktree exists and PR was opened. If neither exists and the previous run started >30 min ago, mark `failed` with `failureReason = "agent did not produce a PR before resume — likely crashed or timed out"`.
 - For `pr-open` tasks: detect manually-merged PRs (`gh pr view --json state` returns `MERGED`) → treat as `done`. Detect deleted branches (`git ls-remote origin <branch>` empty AND PR closed unmerged) → treat as `failed` with reason "branch deleted externally".
-- For `pr-open` / `ci-pass` tasks: re-poll CI and reviews immediately (§Phase 6)
-- For `pending` tasks now unblocked: launch agents (§Phase 5)
+- For `pr-open` / `ci-pass` tasks: re-poll CI and reviews immediately (Phase 6)
+- For `pending` tasks now unblocked: launch agents (Phase 5)
 - Continue from Phase 6
 
 ---
@@ -869,7 +869,7 @@ Print the session banner:
 
 Print the full dashboard table.
 
-Clean up any remaining worktrees for `failed` or `skipped` tasks (belt-and-suspenders — §6a and §ci-fix should have already cleaned these, but handle crash/resume gaps):
+Clean up any remaining worktrees for `failed` or `skipped` tasks (belt-and-suspenders — 6a and ci-fix should have already cleaned these, but handle crash/resume gaps):
 ```bash
 # For each task with status failed/skipped and non-null worktreePath:
 git -C "$REPO_ROOT" worktree remove <worktreePath> --force 2>/dev/null || true
@@ -909,7 +909,7 @@ gh api repos/:owner/:repo/milestones/<MILESTONE_NUMBER> \
 
 ---
 
-## §verify — Post-completion behavioural verification (runs only when `--verify` flag is set)
+## verify — Post-completion behavioural verification (runs only when `--verify` flag is set)
 
 Skip entirely if `verifyEnabled = false`.
 
@@ -924,14 +924,14 @@ CHECKLIST=$(gh issue view <PRD_SOURCE> --json body --jq '.body' | \
 
 If no checklist found in the issue (section missing or empty):
 - Check for `.checklist/prd-<PRD_SOURCE>.md` in the repo root
-- If still not found: print `VERIFY_SKIPPED: no Acceptance Checklist found in PRD #<PRD_SOURCE> and no .checklist/prd-<N>.md. Add an ## Acceptance Checklist section to the PRD issue, then re-run with --verify.` and skip §verify entirely.
+- If still not found: print `VERIFY_SKIPPED: no Acceptance Checklist found in PRD #<PRD_SOURCE> and no .checklist/prd-<N>.md. Add an ## Acceptance Checklist section to the PRD issue, then re-run with --verify.` and skip verify entirely.
 
 If `PRD_SOURCE` is a file path:
 - Check for `.checklist/<PRD_SLUG>.md`; if absent: skip with same message.
 
 ### 2. Start the app
 
-Using the same detection logic as `/verify` §Step 3, auto-detect and start the app from `REPO_ROOT` on `BASE_BRANCH`. Store `APP_PID`. Wait up to 30s for ready.
+Using the same detection logic as `/verify` Step 3, auto-detect and start the app from `REPO_ROOT` on `BASE_BRANCH`. Store `APP_PID`. Wait up to 30s for ready.
 
 If app fails to start: post a comment on the PRD issue:
 ```bash
@@ -939,11 +939,11 @@ gh issue comment <PRD_SOURCE> --body "## 🔴 Behavioural Verification — FAILE
 
 App did not start within 30s at <BASE_URL>. Run /verify manually after starting the app."
 ```
-Then skip remaining §verify steps.
+Then skip remaining verify steps.
 
 ### 3. Run verification subagent
 
-Spawn one `general-purpose` Agent (foreground) with the same prompt as `/verify` §Step 5, substituting the resolved checklist and `BASE_URL`.
+Spawn one `general-purpose` Agent (foreground) with the same prompt as `/verify` Step 5, substituting the resolved checklist and `BASE_URL`.
 
 ### 4. Post results to PRD issue
 
