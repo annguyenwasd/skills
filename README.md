@@ -18,7 +18,6 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 | `design` | Generate an HTML mockup for a screen before implementing it. |
 | `grill-me` | Interrogate a technical plan branch-by-branch until every decision is resolved. |
 | `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability. |
-| `qa` | Sequential QA session that fixes bugs one at a time on a feature branch and queues additional bugs automatically. |
 | `interview-me` | Business-analyst interview to pressure-test a non-technical client's plan. |
 | `prd-to-issues` | Slice a PRD into vertical, independently-shippable GitHub issues. |
 | `ship-it` | End-to-end PRD orchestrator — issue DAG, parallel agents, TDD per slice. |
@@ -171,7 +170,7 @@ Verification subagent has **zero code access** — only curl + the checklist. Pr
 - `/audit` — stress-test a PRD or plan for missing edge cases before slicing.
 - `/design` — generate an HTML mockup for a screen before `/ship-it` implements it.
 - `/improve-codebase-architecture` — run before large feature work to surface refactors that make the slices testable.
-- `/qa` — interactive bug fixing after manual testing; complements `/verify` for UI and non-HTTP behaviours.
+- `/fix` — single-shot bug fixer for one issue at a time on the current branch; writes a per-attempt `.checklist/fix-<slug>-#<try>.md` and runs `/verify` against it.
 
 ### `.checklist/` convention
 
@@ -183,6 +182,7 @@ Planning skills write checklist files to `<project-root>/.checklist/`:
 | `/grill-me` | `.checklist/grill-<YYYYMMDD-HHMMSS>.md` |
 | `/audit` | `.checklist/audit-<YYYYMMDD-HHMMSS>.md` (from input spec, not gaps) |
 | `/write-a-prd` | `.checklist/prd-<issue-number>.md` |
+| `/fix` | `.checklist/fix-<slug>-#<try>.md` (one per attempt — `#1` initial, `#2` re-fix) |
 
 These files are git-ignored (added automatically by `/write-a-prd`; add `.checklist/` to your global gitignore for other workflows).
 

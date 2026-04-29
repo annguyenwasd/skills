@@ -1,19 +1,17 @@
 ---
 name: fix
-description: Single-shot bug fixer. Stripped-down /qa for one request only — no queue, no separate branch, no subagent. Fixes inline on the current branch using strict TDD, runs /verify --qa 1 in the foreground, allows one re-fix on verify failure, then prompts the user to confirm. Use when the user wants a single bug fixed end-to-end on the current branch in the current session, mentions "fix this", or invokes /fix.
+description: Single-shot bug fixer. Fixes one bug inline on the current branch using strict TDD — no queue, no separate branch, no subagent. Writes a per-attempt checklist (`.checklist/fix-<slug>-#<try>.md`), runs /verify against it in the foreground, allows one re-fix on verify failure, then prompts the user to confirm. Use when the user wants a single bug fixed end-to-end on the current branch in the current session, mentions "fix this", or invokes /fix.
 model: opus
 argument-hint: "(--no-verify) (<bug description>)"
 ---
 
 # /fix — Single-Shot Bug Fixer
 
-Fix exactly one bug end-to-end in the current session, on the current branch, in the main conversation (no subagent). One TDD cycle, one foreground `/verify --qa 1`, optional one re-fix on verify failure, one confirmation prompt, done.
-
-This is a stripped-down sibling of `/qa`. Use `/qa` when you want batched bug intake, isolated branches, and background agents. Use `/fix` when you want one bug fixed inline, right now, on the branch you are already on.
+Fix exactly one bug end-to-end in the current session, on the current branch, in the main conversation (no subagent). One TDD cycle, one foreground `/verify --checklist <path>` against the per-attempt checklist this skill writes, optional one re-fix on verify failure, one confirmation prompt, done.
 
 ## Arguments
 
-- `--no-verify` — skip the automatic `/verify --qa 1` step after the fix. Jump straight to the confirm prompt.
+- `--no-verify` — skip the automatic `/verify --checklist <path>` step after the fix. Jump straight to the confirm prompt.
 - `<bug description>` — free-form description; everything after the flags is treated as the bug. Optional; if omitted, ask once.
 
 Parse at start. Store as:
@@ -69,15 +67,15 @@ Probe in this order; stop at the first match:
 
 Store `TEST_CMD`.
 
-### Detect marker syntax
+### Detect comment prefix
 
-The TDD marker is `qa-fix:#1` as a comment in the project's language (re-using the `/qa` convention so `/verify --qa 1` recognises it):
+The TDD marker is composed later as `<COMMENT_PREFIX> fix:<slug>-#<try>` (the slug comes from the title in Step 2, the try comes from the attempt index in Step 3 / Step 4b — neither is known yet). Step 1 only resolves the language-appropriate comment prefix:
 
-- JS / TS / Java / Rust / Go / C-family → `// qa-fix:#1`
-- Python / Ruby / Shell                  → `# qa-fix:#1`
-- Other → ask user.
+- JS / TS / Java / Rust / Go / C-family → `COMMENT_PREFIX="//"`
+- Python / Ruby / Shell                  → `COMMENT_PREFIX="#"`
+- Other → ask user for the line-comment token in this language.
 
-Store as `MARKER`.
+Store as `COMMENT_PREFIX`. The full marker string is built inline at write time; do not store a fixed marker constant.
 
 ## Step 2 — Collect bug description
 
@@ -110,9 +108,15 @@ Read and follow the TDD skill at `~/.claude/skills/tdd/SKILL.md`. Apply RED-GREE
 
 Test runner: `<TEST_CMD>` (or `<TEST_CMD> <test file>` for a single test).
 
+Set `ATTEMPT=1` (initial fix; the re-fix path in Step 4b bumps it to `2`). Compose the TDD marker for this attempt as:
+
+```
+MARKER="${COMMENT_PREFIX} fix:${title}-#${ATTEMPT}"
+```
+
 Additions on top of the TDD skill:
 
-- **Marker.** Add `<MARKER>` as a comment on the line IMMEDIATELY ABOVE the new test definition (the `test()` / `it()` / `describe(...)` block in JS, `def test_xxx()` in Python, `#[test]` in Rust, `func TestXxx()` in Go, etc.). Required. Without it the fix is rejected as TDD_SKIPPED.
+- **Marker.** Add `${MARKER}` as a comment on the line IMMEDIATELY ABOVE the new test definition (the `test()` / `it()` / `describe(...)` block in JS, `def test_xxx()` in Python, `#[test]` in Rust, `func TestXxx()` in Go, etc.). Required. Without it the fix is rejected as TDD_SKIPPED.
 - **No fallback if you cannot write a failing test.** Print exactly one line and stop:
 
   ```
@@ -149,7 +153,7 @@ Commit rules:
 
 - Subject line: `fix(<scope>): <what-was-broken>` — not a generic "fix bug".
 - Body: 2–3 bullets max.
-- The test file with `<MARKER>` must be one of the staged files.
+- The test file containing `${MARKER}` must be one of the staged files.
 
 Store the resulting commit hash as `COMMIT_HASH` (full 40 chars).
 
@@ -160,10 +164,10 @@ Before continuing, confirm the marker landed in the commit's diff:
 ```bash
 git -C "$REPO_ROOT" show --pretty=format: --name-only "$COMMIT_HASH" \
   | xargs -I{} git -C "$REPO_ROOT" show "$COMMIT_HASH" -- {} 2>/dev/null \
-  | grep -E "qa-fix:#1\b"
+  | grep -E "fix:${title}-#${ATTEMPT}\b"
 ```
 
-If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`. Reset the commit (`git reset --hard HEAD~1` is safe here because the precheck guaranteed a clean tree at start), final status `FAILED`, jump to Step 6.
+If missing → treat as `TDD_SKIPPED: no fix:${title}-#${ATTEMPT} marker in test diff`. Reset the commit (`git reset --hard HEAD~1` is safe here because the precheck guaranteed a clean tree at start), final status `FAILED`, jump to Step 6.
 
 ## Step 4 — Write checklist + run /verify
 
@@ -176,18 +180,19 @@ UI_HIT=$(git -C "$REPO_ROOT" diff --name-only "$COMMIT_HASH^...$COMMIT_HASH" \
 [ -n "$UI_HIT" ] && UI_FLAG=true || UI_FLAG=false
 ```
 
-### Write `.checklist/qa-1.md`
+### Write `.checklist/fix-<slug>-#<try>.md`
 
 ```bash
 CHECKLIST_DIR="$REPO_ROOT/.checklist"
 mkdir -p "$CHECKLIST_DIR"
+CHECKLIST_PATH="$CHECKLIST_DIR/fix-${title}-#${ATTEMPT}.md"
 ```
 
-Write `$CHECKLIST_DIR/qa-1.md` (overwrite if it exists), substituting stored fields:
+Write `$CHECKLIST_PATH` (overwrite if a file at the same `<slug>-#<try>` already exists from a stale run), substituting stored fields:
 
 ```markdown
 ---
-qa-id: 1
+fix-id: <title>-#<ATTEMPT>
 type: <ui if UI_FLAG=true, else api>
 ---
 
@@ -212,37 +217,37 @@ if ROOT="$(git -C "$REPO_ROOT" rev-parse --show-toplevel 2>/dev/null)"; then
 fi
 ```
 
-Print: `Checklist written: .checklist/qa-1.md`
+Print: `Checklist written: .checklist/fix-${title}-#${ATTEMPT}.md`
 
 ### Skip verify if --no-verify
 
 If `AUTO_VERIFY == false`: set `VERIFY_STATUS=not-run`, skip the rest of Step 4, jump to Step 5 (confirm prompt).
 
-### Run /verify --qa 1 (foreground subagent)
+### Run /verify --checklist <path> (foreground subagent)
 
-The harness rejects nested skill invocations from inside a skill. Spawn a foreground `general-purpose` Agent that runs `/verify --qa 1` non-interactively. Block on completion. Store stdout as `VERIFY_REPORT`.
+The harness rejects nested skill invocations from inside a skill. Spawn a foreground `general-purpose` Agent that runs `/verify --checklist .checklist/fix-${title}-#${ATTEMPT}.md` non-interactively. Block on completion. Store stdout as `VERIFY_REPORT`.
 
-Use this prompt for the subagent:
+Use this prompt for the subagent (substitute `${title}` and `${ATTEMPT}` into the `--checklist` path):
 
 ```
 You are running the /verify skill non-interactively for /fix.
 
 Read the skill at /Users/annguyenvanchuc/workspace/skills/verify/SKILL.md
-and execute it with arguments:  --qa 1
+and execute it with arguments:  --checklist .checklist/fix-<title>-#<ATTEMPT>.md
 
 Repo root: <REPO_ROOT>
 Branch (already checked out): <CURRENT_BRANCH>
 
 Constraints:
 - Do not modify code, do not switch branches, do not commit anything.
-- Do not call /fix, /qa, or any other skill.
+- Do not call /fix or any other skill.
 - Print only the final Verification Report (Step 6 of /verify). The
   /fix orchestrator parses it.
 - If /verify cannot start the app or the subagent errors, your last
   line must be exactly:  VERIFY_ERROR: <one-sentence reason>
 ```
 
-Print to the user before spawning: `Verifying #1 — running /verify --qa 1… (this blocks until done)`
+Print to the user before spawning: `Verifying #${ATTEMPT} — running /verify --checklist .checklist/fix-${title}-#${ATTEMPT}.md… (this blocks until done)`
 
 ### Classify the verify result
 
@@ -276,8 +281,8 @@ Set `VERIFY_STATUS = pass | fail | tooling | error`. If `Total == 0`, classify a
 **tooling** → print the install hint from `VERIFY_REPORT` (lines between `Browser pass skipped:` and the next blank line), then call `AskUserQuestion`:
 
 ```
-question: "#1 `<title>` — verify could not run UI checks (UNVERIFIABLE:<n>); browser tooling missing. Next step?"
-header:   "Verify #1"
+question: "#${ATTEMPT} `<title>` — verify could not run UI checks (UNVERIFIABLE:<n>); browser tooling missing. Next step?"
+header:   "Verify #${ATTEMPT}"
 options:
   - label: "Continue"  description: "Treat tooling gap as not-our-problem; go to confirm prompt"
   - label: "Cancel"    description: "Abort without confirming — commit stays on branch for manual inspection"
@@ -288,8 +293,8 @@ options:
 **error** → call `AskUserQuestion`:
 
 ```
-question: "#1 `<title>` — /verify errored (autostart or subagent failure). Next step?"
-header:   "Verify #1"
+question: "#${ATTEMPT} `<title>` — /verify errored (autostart or subagent failure). Next step?"
+header:   "Verify #${ATTEMPT}"
 options:
   - label: "Continue"  description: "Skip verify and go to confirm prompt"
   - label: "Cancel"    description: "Abort without confirming — commit stays on branch for manual inspection"
@@ -300,8 +305,8 @@ options:
 **fail** → if no re-fix has been attempted yet, call `AskUserQuestion`:
 
 ```
-question: "#1 `<title>` — verify failed (FAIL:<n> TIMEOUT:<n> UNVERIFIABLE:<n>). Next step?"
-header:   "Verify #1"
+question: "#${ATTEMPT} `<title>` — verify failed (FAIL:<n> TIMEOUT:<n> UNVERIFIABLE:<n>). Next step?"
+header:   "Verify #${ATTEMPT}"
 options:
   - label: "Re-fix"        description: "Run one more TDD cycle on this branch using verify failures (Recommended)"
   - label: "Continue"      description: "Skip remaining failures and go to confirm prompt"
@@ -318,11 +323,11 @@ If a re-fix has **already** been attempted, skip the prompt and fall through to 
 
 Triggered only by `Re-fix` (or typed feedback) on the post-verify-fail prompt, and only on the first verify failure of this `/fix` invocation.
 
-1. Set the re-fix-attempted flag.
+1. Set the re-fix-attempted flag and bump `ATTEMPT=2`. Recompose the marker for this attempt: `MARKER="${COMMENT_PREFIX} fix:${title}-#2"`.
 2. Build the re-fix feedback string:
 
    ```
-   Verify reported failures (from /verify --qa 1):
+   Verify reported failures (from /verify --checklist .checklist/fix-${title}-#1.md):
    <the "Items Requiring Attention" block from VERIFY_REPORT verbatim;
     if absent, substitute the failing rows from the verify result table>
 
@@ -332,19 +337,21 @@ Triggered only by `Re-fix` (or typed feedback) on the post-verify-fail prompt, a
 3. Run another TDD cycle inline (same Step 3 protocol) on the same branch, with one extra constraint:
 
    - The user feedback describes a **new** failing scenario the previous fix did not cover.
-   - Write a **new** failing test for that scenario (must genuinely RED against current code) with its own `<MARKER>` on the line above. Different test, same marker text.
+   - Write a **new** failing test for that scenario (must genuinely RED against current code) with its own `${MARKER}` (i.e. `fix:${title}-#2`) on the line above. New test, new marker value. The original `#1` test and its marker stay in place — Step 4b adds a second test, it does not replace the first.
    - Then GREEN, then REFACTOR. Commit normally — this becomes a second commit on `CURRENT_BRANCH`.
    - If feedback is too vague to derive a concrete failing test, ask once for a concrete reproduction. If still impossible → `TDD_SKIPPED`, final status `FAILED`, jump to Step 6.
 
-4. After the second commit, re-run `/verify --qa 1` (Step 4 verify subagent invocation again), classify the result, and **fall through to Step 5 unconditionally** — no second re-fix prompt regardless of the new classification. Record the second classification as `VERIFY_STATUS`.
+4. After the second commit, write a NEW checklist file at `.checklist/fix-${title}-#2.md` (do NOT overwrite `#1.md` — it stays as the audit trail of the first attempt). Re-run `/verify --checklist .checklist/fix-${title}-#2.md` (Step 4 verify subagent invocation again), classify the result, and **fall through to Step 5 unconditionally** — no second re-fix prompt regardless of the new classification. Record the second classification as `VERIFY_STATUS`.
+
+   The TDD enforcement check on the new commit greps for `fix:${title}-#2\b`; the `#1` marker still exists in the diff, but Step 4b only cares that `#2` is present.
 
 ## Step 5 — Confirm
 
 Call `AskUserQuestion`:
 
 ```
-question: "#1 `<title>` — fix committed on `<CURRENT_BRANCH>` (verify: <VERIFY_STATUS>). Test it manually, then confirm. Fixed?"
-header:   "Confirm #1"
+question: "#${ATTEMPT} `<title>` — fix committed on `<CURRENT_BRANCH>` (verify: <VERIFY_STATUS>). Test it manually, then confirm. Fixed?"
+header:   "Confirm #${ATTEMPT}"
 options:
   - label: "Confirmed fixed"  description: "Mark APPROVED and exit"
   - label: "Still broken"     description: "Mark FAILED and exit — commit stays on branch for inspection"
@@ -358,23 +365,24 @@ options:
 Always exit with exactly one line:
 
 ```
-#1 <title> — <APPROVED|FAILED> (verify: <VERIFY_STATUS>) — commit <short-hash> on <CURRENT_BRANCH>
+#${ATTEMPT} <title> — <APPROVED|FAILED> (verify: <VERIFY_STATUS>) — commit <short-hash> on <CURRENT_BRANCH> — checklist .checklist/fix-${title}-#${ATTEMPT}.md
 ```
 
 Where:
 
-- `<short-hash>` is the first 8 chars of `COMMIT_HASH` if a commit was produced; else `none`.
+- `${ATTEMPT}` is the latest attempt the orchestrator ran (1 if Step 4b never fired, 2 if it did).
+- `<short-hash>` is the first 8 chars of `COMMIT_HASH` (the most recent commit produced — Step 4b's commit if a re-fix happened, else Step 3's). `none` if no commit was produced.
 - `<VERIFY_STATUS>` is `pass | fail | tooling | error | not-run | skipped` (use `skipped` when `--no-verify` was passed).
-- If `TDD_SKIPPED` or pre-commit `FAILED` produced no commit, write `commit none on <CURRENT_BRANCH>` and add ` — reason: <one-line reason>` to the end.
+- If `TDD_SKIPPED` or pre-commit `FAILED` produced no commit, write `commit none on <CURRENT_BRANCH>` and add ` — reason: <one-line reason>` to the end. If no checklist file was written either (Step 4 never reached), drop the trailing ` — checklist …` clause.
 
 The commit (when present) is left on `CURRENT_BRANCH`. No branch deletion. No GitHub issue. No queue drain. The `/fix` invocation ends here.
 
 ## Rules
 
 - Never push to remote — the user pushes when they are happy.
-- Never spawn background agents — TDD work runs in the main conversation. The only foreground subagent allowed is the `/verify --qa 1` runner in Step 4.
-- Never file GitHub issues — `/fix` is local-only by design. If the user wants an issue, they invoke `/qa` instead.
+- Never spawn background agents — TDD work runs in the main conversation. The only foreground subagent allowed is the `/verify --checklist <path>` runner in Step 4.
+- Never file GitHub issues — `/fix` is local-only by design.
 - Never run more than one inline re-fix per `/fix` invocation.
 - Never auto-stash, auto-rebase, or auto-resolve conflicts — abort instead.
 - Never call `git add .` or `git add -A` — stage explicit files.
-- The TDD marker is `qa-fix:#1` so `/verify --qa 1` recognises it; do not change the id.
+- The TDD marker is `fix:<slug>-#<try>`; the slug must match the kebab title and the try must match the attempt counter so the enforcement check finds the marker in the test diff.

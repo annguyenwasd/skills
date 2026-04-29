@@ -2,7 +2,7 @@
 name: verify
 description: Verify that a running app's behaviour matches a checklist of expected outcomes. Auto-starts the app if it isn't running, spawns a fresh-context subagent (curl-only, no code access) to verify each item, then shuts the app down. Reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Invoke as /verify.
 model: opus
-argument-hint: "[--checklist <path>] [--prd <number>] [--qa <number>] [--base-url <url>] [--timeout <seconds>] [--ready-timeout <seconds>] [--start-cmd <command>] [--fix] [--no-browser]"
+argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--ready-timeout <seconds>] [--start-cmd <command>] [--fix] [--no-browser]"
 ---
 
 # /verify — Behavioural Verification
@@ -19,7 +19,6 @@ Parse from the invocation string:
 
 - `--checklist <path>` — path to checklist file (optional when `.checklist/` files exist — see auto-resolve below)
 - `--prd <number>` — use `.checklist/prd-<number>.md` (shorthand for PRD-backed checklists; equivalent to `--checklist .checklist/prd-<number>.md`)
-- `--qa <number>` — use `.checklist/qa-<number>.md` (shorthand for QA-session checklists; equivalent to `--checklist .checklist/qa-<number>.md`)
 - `--base-url <url>` — base URL of the running app (default: `http://localhost:3000`). Trailing `/` stripped before use.
 - `--timeout <seconds>` — max seconds to wait for async behaviours (default: 30). Must be a positive integer ≤ 600.
 - `--ready-timeout <seconds>` — max seconds to wait for the app to become reachable in Step 3c (default: 30). Must be a positive integer ≤ 600.
@@ -31,18 +30,17 @@ Parse from the invocation string:
 
 Before any other step:
 
-- If multiple checklist flags are provided, apply precedence: `--checklist` > `--prd` > `--qa`. Print: `Multiple checklist flags given; using --<winner>` and ignore the rest.
+- If multiple checklist flags are provided, apply precedence: `--checklist` > `--prd`. Print: `Multiple checklist flags given; using --<winner>` and ignore the rest.
 - If `--timeout` or `--ready-timeout` is missing, ≤ 0, non-numeric, or > 600 → abort: `Invalid <flag>: must be a positive integer ≤ 600.`
 - Strip a single trailing `/` from `--base-url` so sub-path joins don't double-slash.
 
-### Checklist auto-resolve (when `--checklist`, `--prd`, and `--qa` are all absent)
+### Checklist auto-resolve (when `--checklist` and `--prd` are both absent)
 
 ```bash
 CHECKLIST_DIR="$(git rev-parse --show-toplevel 2>/dev/null)/.checklist"
 [ -d "$CHECKLIST_DIR" ] || CHECKLIST_DIR="./.checklist"
 ```
 
-- If `--qa <N>`: use `$CHECKLIST_DIR/qa-<N>.md`. Abort if not found.
 - If `--prd <N>`: use `$CHECKLIST_DIR/prd-<N>.md`. Abort if not found.
 - If no flag: list `.md` files in `$CHECKLIST_DIR`, sorted by modification time descending.
   - Zero files → abort: `"No checklist found. Run /interview-me, /grill-me, or /write-a-prd first, or pass --checklist <path>."`
@@ -300,7 +298,7 @@ rm -f "$SCREENSHOT_DIR"/item-*.png
 
 The `rm -f` clears stale `item-*.png` files from prior runs of the same checklist — otherwise screenshots from previously-UNVERIFIABLE-but-now-curl-PASS items would linger and mislead the reviewer. Other files (if any) are left untouched.
 
-For example, `--qa 1` resolves to `.checklist/qa-1.md` → `SCREENSHOT_DIR=.checklist/qa-1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by /qa.
+For example, `--checklist .checklist/fix-<slug>-#1.md` resolves to `SCREENSHOT_DIR=.checklist/fix-<slug>-#1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by the upstream skill that produced the checklist.
 
 Mint a unique session name so concurrent CLI sessions (other `/verify` runs, manual debugging) don't collide on the same browser:
 
@@ -641,5 +639,5 @@ where `<#>` is the item number. Omit the tag only when capture errored.
 - Browser pass re-verifies only `UNVERIFIABLE` items — never re-runs curl-verified results
 - Browser subagent has same code-isolation contract as the curl subagent; it drives `playwright-cli` only and may only write to `/tmp/` and `<SCREENSHOT_DIR>`
 - Browser-pass rows always carry a `(browser)` suffix on their status — preserve it through merge so Step 7 can detect them
-- Browser pass writes one PNG per re-checked item to `<checklist-dir>/<checklist-stem>-screenshots/item-<#>.png` (e.g. `.checklist/qa-1-screenshots/item-3.png`). Folder is created lazily by Step 5b-1 — absent when `--no-browser` skips the pass. Files inherit the existing `.checklist/` gitignore line. A failed screenshot capture must NOT change item status; the evidence cell simply omits the `[screenshot: ...]` tag
+- Browser pass writes one PNG per re-checked item to `<checklist-dir>/<checklist-stem>-screenshots/item-<#>.png` (e.g. `.checklist/fix-<slug>-#1-screenshots/item-3.png`). Folder is created lazily by Step 5b-1 — absent when `--no-browser` skips the pass. Files inherit the existing `.checklist/` gitignore line. A failed screenshot capture must NOT change item status; the evidence cell simply omits the `[screenshot: ...]` tag
 - Do not run two `/verify` invocations against the same project simultaneously — both will try to auto-start the app and race on the port
