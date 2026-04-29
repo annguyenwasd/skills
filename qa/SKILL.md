@@ -236,18 +236,20 @@ If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`.
 
     <fixSummary>
     ```
-    Print: `Checklist written: .checklist/qa-<id>.md — verify with: /verify --qa <id>`
+    Print: ``Checklist written: .checklist/qa-<id>.md — pick "Verify" below or run `/verify --qa <id>` later.``
   - Call `AskUserQuestion`:
     ```
     question: "#<id> `<title>` ready.\n\nRoot cause: <rootCause>\nFix: <fixSummary>\n\nMerge into `<BASE_BRANCH>`?"
-    header:   "Merge #<id>"
+    header:   "Review #<id>"
     options:
       - label: "Merge"   description: "Rebase + fast-forward merge (branch kept until you confirm)"
+      - label: "Verify"  description: "Run /verify --qa <id> against bug branch, then re-prompt"
       - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
     ```
   - If "Merge" → run **§merge-flow**
+  - If "Verify" → run **§verify-flow**
   - If "Re-fix" / Other (user typed feedback) → run **re-fix flow** (see Phase C)
-  - **Tie-breaker.** If the user types a free-form description targeting `#<id>` while this `AskUserQuestion` is still pending, the harness routes it as the `Other` answer (typed feedback). Treat it as Re-fix with that text as the user's feedback. The `pending-review` → `fixing` transition happens once, not twice.
+  - **Tie-breaker** (applies to **every** `AskUserQuestion` in §coordinator, §verify-flow, and §merge-flow). If the user types a free-form description targeting `#<id>` while a prompt is open, the harness routes it as the `Other` answer (typed feedback). Treat `Other` as the closest re-fix-shaped option on the current prompt: **Re-fix** on the post-success and post-verify-pass prompts, **Re-fix** on the post-verify-fail prompt, **Cancel→Re-fix** on the tooling/error prompts (treat the typed text as a re-fix request), **Still broken** on the post-merge prompt. The `pending-review` → `fixing` transition happens once, not twice.
 - `FAILED: <reason>` → `status=failed`, failureReason=reason. Then run §coordinator queue-drain.
 - `TDD_SKIPPED: <reason>` → `status=failed`, failureReason=`TDD skipped: <reason>` **(hard fail, never retry)**. Then run §coordinator queue-drain.
 
@@ -351,6 +353,179 @@ Your LAST message must be EXACTLY one of these three forms:
   TDD_SKIPPED: <one-sentence reason>
 
 Never push to remote.
+```
+
+---
+
+## §verify-flow — run /verify and re-prompt for merge
+
+Called from §coordinator when the user picks **Verify** on a `pending-review`
+bug. Bug stays in `pending-review` for the entire flow. The bug branch is
+already checked out in the main repo.
+
+**Bug-record additions.** Extend the bug record with:
+
+- `verifyStatus` ∈ `{not-run, pass, fail, error}` — default `not-run`.
+- `verifyReport` — full text from the most recent /verify run (used to
+  compose re-fix feedback in §verify-feedback).
+
+**Step 1 — Print progress and confirm branch checkout.**
+
+```bash
+echo "Verifying #<id> — running /verify --qa <id>… (this blocks until done)"
+git -C "$REPO_ROOT" checkout "<branch>"
+```
+
+**Step 2 — Invoke /verify via a foreground Agent.**
+
+Do **not** use `Skill(skill="verify")` — the harness rejects nested skill
+invocations while /qa is running. Spawn a foreground `general-purpose`
+Agent that follows verify's SKILL.md instructions with `--qa <id>`. Block
+on completion. Capture stdout as `VERIFY_REPORT` and store on the bug
+record's `verifyReport`. Use **§verify-invoke-prompt**.
+
+**Step 3 — Classify the run.**
+
+```
+if "VERIFY_ERROR" in VERIFY_REPORT or no "## Summary" block:
+    classification = error
+else:
+    parse PASS, FAIL, TIMEOUT, ASSUMED, UNVERIFIABLE counts from Summary
+    fails = FAIL + TIMEOUT
+    unv   = UNVERIFIABLE
+    if "Browser MCP pass skipped" in report or "Browser pass skipped" in report:
+        tool_unv = unv
+    else:
+        tool_unv = 0
+    real_fails = fails + (unv - tool_unv)
+
+    if real_fails == 0 and tool_unv == 0:
+        classification = pass
+    elif real_fails == 0 and tool_unv > 0:
+        classification = tooling
+    else:
+        classification = fail
+```
+
+Set `verifyStatus = pass | fail | error` (`tooling` records as `fail` on
+the record but takes its own prompt branch below).
+
+If `Total == 0`, classify as `pass` and append the literal string
+` (checklist had 0 items)` to the next prompt's question text — the user
+needs to know it was a no-op.
+
+**Step 4 — Branch on classification.**
+
+**4a · `classification == pass`** — re-prompt for merge:
+
+```
+question: "#<id> `<title>` — verify passed (PASS:<n> ASSUMED:<n>)<empty-note>. Merge into `<BASE_BRANCH>`?"
+header:   "Merge #<id>"
+options:
+  - label: "Merge"   description: "Rebase + fast-forward merge (branch kept until you confirm)"
+  - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
+```
+
+- "Merge" → §merge-flow.
+- "Re-fix" / Other → re-fix flow (Phase C).
+
+**4b · `classification == fail`** — at least one real FAIL/TIMEOUT/non-tooling
+UNVERIFIABLE:
+
+```
+question: "#<id> `<title>` — verify failed (FAIL:<n> TIMEOUT:<n> UNVERIFIABLE:<n>). Next step?"
+header:   "Verify #<id>"
+options:
+  - label: "Re-fix"        description: "Re-fix on same branch using verify failures + your notes (Recommended)"
+  - label: "Merge anyway"  description: "Skip verify and merge — only if failures are checklist artefacts"
+  - label: "Verify again"  description: "Re-run /verify --qa <id> (e.g. flaky timeout); each retry restarts the app"
+```
+
+- "Re-fix" / Other → re-fix flow (Phase C) with composite feedback (see
+  **§verify-feedback**).
+- "Merge anyway" → §merge-flow.
+- "Verify again" → loop to §verify-flow Step 1. No hard cap; document the
+  cost in the option description above.
+
+**4c · `classification == tooling`** — every remaining failure is
+UNVERIFIABLE caused by missing browsermcp / Playwright:
+
+```
+question: "#<id> `<title>` — verify could not run UI checks (UNVERIFIABLE:<n>); browser tooling missing. Next step?"
+header:   "Verify #<id>"
+options:
+  - label: "Show install hint"  description: "Print the install command from the verify report and re-prompt"
+  - label: "Merge anyway"       description: "Tooling gap is unrelated to fix correctness"
+  - label: "Cancel"             description: "Stay on `pending-review`; pick Merge/Verify/Re-fix later"
+```
+
+- "Show install hint" → echo the lines from `VERIFY_REPORT` between
+  `Browser (MCP|pass) skipped:` and the next blank line, then re-prompt
+  with the same options.
+- "Merge anyway" → §merge-flow.
+- "Cancel" → return to the §coordinator post-success prompt
+  (Merge / Verify / Re-fix) without re-running verify.
+- "Other" (typed feedback) → treat as Cancel + Re-fix: store typed text as
+  re-fix feedback and run re-fix flow (Phase C).
+
+**4d · `classification == error`** — /verify itself failed:
+
+```
+question: "#<id> `<title>` — /verify errored (autostart or subagent failure). Next step?"
+header:   "Verify #<id>"
+options:
+  - label: "Re-fix"        description: "Treat as re-fix; describe what to address"
+  - label: "Merge anyway"  description: "Skip verify and merge"
+  - label: "Cancel"        description: "Stay on `pending-review`; pick Merge/Verify/Re-fix later"
+```
+
+Routing analogous to 4c.
+
+**Free-form input during /verify run.** The verify-runner Agent is
+foreground and the orchestrator is blocked. Any user message typed during
+this window is delivered after the Agent returns; route it as `Other` on
+whichever post-verify prompt opens next (per the generalised tie-breaker
+in §coordinator).
+
+---
+
+## §verify-feedback — composing the re-fix feedback string
+
+When "Re-fix" / Other is picked from a post-verify-fail prompt (4b), build
+the §agent-prompt RE-FIX NOTE `User feedback:` line as:
+
+```
+Verify reported failures (from /verify --qa <id>):
+<the "Items Requiring Attention" block from VERIFY_REPORT verbatim>
+
+User notes: <typed feedback if any, else omit this line>
+```
+
+Typed feedback is **appended**, never replaces the verify items. If the
+verify report has no "Items Requiring Attention" section (e.g. only
+TIMEOUT rows produced one), substitute the failing rows from the verify
+result table instead.
+
+---
+
+## §verify-invoke-prompt — prompt for the verify-runner Agent
+
+```
+You are running the /verify skill non-interactively for /qa.
+
+Read the skill at /Users/annguyenvanchuc/workspace/skills/verify/SKILL.md
+and execute it with arguments:  --qa <id>
+
+Repo root: <REPO_ROOT>
+Bug branch (already checked out): <branch>
+
+Constraints:
+- Do not modify code, do not switch branches, do not commit anything.
+- Do not call /qa or any other skill.
+- Print only the final Verification Report (Step 6 of /verify). The
+  /qa orchestrator parses it.
+- If /verify cannot start the app or the subagent errors, your last
+  line must be exactly:  VERIFY_ERROR: <one-sentence reason>
 ```
 
 ---
@@ -471,10 +646,14 @@ Print the session banner:
 
 BUGS APPROVED AND MERGED:
 ──────────────────────────────────────────────────────────────
-| #  | Title                       | Test File                    | Commit    |
-|----|-----------------------------|------------------------------|-----------|
-|  1 | fix-bug-title               | src/__tests__/foo.test.ts    | abc12345  |
-|  3 | another-bug                 | src/__tests__/bar.test.ts    | def67890  |
+| #  | Title                       | Test File                    | Commit    | Verify   |
+|----|-----------------------------|------------------------------|-----------|----------|
+|  1 | fix-bug-title               | src/__tests__/foo.test.ts    | abc12345  | pass     |
+|  3 | another-bug                 | src/__tests__/bar.test.ts    | def67890  | not-run  |
+
+The `Verify` column echoes the bug record's `verifyStatus`
+(`pass | fail | error | not-run`); `not-run` means the user merged without
+picking the Verify option in §coordinator or §verify-flow.
 
 BUGS THAT DID NOT PASS:
 ──────────────────────────────────────────────────────────────
