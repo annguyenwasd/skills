@@ -59,6 +59,16 @@ Provides `/commit`, `/commit-push-pr`, `/clean_gone`.
 
 The custom `/commit-push` command (commit + push, no PR) lives in `commands/commit-push.md` in this repo and is symlinked into `~/.claude/commands/` by `link-claude-md.sh`.
 
+### Playwright (for `/verify` browser pass)
+
+```bash
+npm i -g @playwright/cli         # CLI — github.com/microsoft/playwright-cli
+npm i -D playwright              # local Node API (per project that needs browser verification)
+npx playwright install chromium  # browser binary
+```
+
+`/verify` re-checks `UNVERIFIABLE` items by driving a headless Chromium. Skipped automatically if any of the three pieces is missing — see warning text in `verify/SKILL.md` § 5b-1. Pass `--no-browser` to opt out.
+
 ### GitHub MCP server
 
 ```bash
@@ -187,6 +197,7 @@ Claude-related plugins and references I rely on. Append new finds here.
 
 ### Tools
 
+- [microsoft/playwright-cli](https://github.com/microsoft/playwright-cli) — global CLI bundling Chromium/Firefox/WebKit. Used by `/verify`'s browser pass to drive headless browsers when curl can't verify a checklist item. Now distributed as `@playwright/cli`.
 - [microsoft/markitdown](https://github.com/microsoft/markitdown) — Python utility that converts PDFs, Word, Excel, images, and audio into LLM-friendly Markdown. Handy preprocessor for feeding mixed documents into a Claude session or knowledge base.
 - [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) — agent-native personalized learning assistant: multi-modal chat, document analysis, persistent memory, autonomous tutoring agents.
 
