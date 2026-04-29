@@ -413,7 +413,7 @@ else:
     parse PASS, FAIL, TIMEOUT, ASSUMED, UNVERIFIABLE counts from Summary
     fails = FAIL + TIMEOUT
     unv   = UNVERIFIABLE
-    if "Browser MCP pass skipped" in report or "Browser pass skipped" in report:
+    if "Browser pass skipped" in report:
         tool_unv = unv
     else:
         tool_unv = 0
@@ -468,7 +468,7 @@ options:
   cost in the option description above.
 
 **4c · `classification == tooling`** — every remaining failure is
-UNVERIFIABLE caused by missing browsermcp / Playwright:
+UNVERIFIABLE caused by missing Playwright:
 
 ```
 question: "#<id> `<title>` — verify could not run UI checks (UNVERIFIABLE:<n>); browser tooling missing. Next step?"
@@ -480,7 +480,7 @@ options:
 ```
 
 - "Show install hint" → echo the lines from `VERIFY_REPORT` between
-  `Browser (MCP|pass) skipped:` and the next blank line, then re-prompt
+  `Browser pass skipped:` and the next blank line, then re-prompt
   with the same options.
 - "Merge anyway" → merge-flow.
 - "Cancel" →
