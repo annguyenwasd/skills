@@ -1,8 +1,8 @@
 ---
 name: qa
-description: Interactive QA session where user reports bugs conversationally. Fixes bugs one at a time on a feature branch in the current repo and queues additional bugs entered while a fix is in flight. Every fix must follow strict TDD RED-GREEN-REFACTOR — TDD_SKIPPED is a hard fail with no exceptions. When a bug is fixed, prompts user interactively (root cause + fix summary) to merge or re-fix. After merge, branch is kept for manual testing; user confirms fix or requests re-fix before branch is removed. Failed bugs get GitHub issues. Use when user wants bugs fixed on the spot during QA, mentions "qa", or wants sequential TDD auto-fix during QA.
+description: Interactive QA session where user reports bugs conversationally. Fixes bugs one at a time on a feature branch in the current repo and queues additional bugs entered while a fix is in flight. Every fix must follow strict TDD RED-GREEN-REFACTOR — TDD_SKIPPED is a hard fail with no exceptions. Every fix and re-fix is auto-verified via `/verify --qa <id>` before the merge prompt; pass `--no-verify` to skip. After merge, branch is kept for manual testing; user confirms fix or requests re-fix before branch is removed. Failed bugs get GitHub issues. Use when user wants bugs fixed on the spot during QA, mentions "qa", or wants sequential TDD auto-fix during QA.
 model: opus
-argument-hint: "(--prd <issue-number>)"
+argument-hint: "(--prd <issue-number>) (--no-verify)"
 ---
 
 # Interactive QA Session
@@ -12,8 +12,12 @@ Run an interactive QA session. User describes bugs. Fix bugs one at a time on a 
 ## Arguments
 
 - `--prd <number>` — (optional) GitHub issue number of the parent PRD. When provided, every GitHub issue filed in this session gets labeled `PRD-<number>` and `QA`.
+- `--no-verify` — (optional) Skip the automatic `/verify --qa <id>` step after each fix and re-fix. Falls back to the manual Merge / Verify / Re-fix prompt.
 
-Parse at session start. Store as `PRD_NUMBER` (integer or null) in context.
+Parse at session start. Store as:
+
+- `PRD_NUMBER` — integer or null
+- `AUTO_VERIFY` — boolean; default `true`. Set to `false` when `--no-verify` is present.
 
 ## Session start prechecks
 
@@ -173,7 +177,7 @@ If the user does NOT speak and no notification arrives within ~30 minutes of "do
 
 ### Step 2 — Continue accepting user input
 
-After "done", approval is driven by `AskUserQuestion` in coordinator — no need to type "approve". Still accept:
+After "done", approval is driven by `AskUserQuestion` — in verify-flow (4a/4b/4c/4d) under default `AUTO_VERIFY=true`, or in coordinator under `--no-verify`. No need to type "approve". Still accept:
 - Free-form description targeting a `pending-review` `#<id>` → re-fix flow (fallback if AskUserQuestion is not yet visible).
 - New bug description (no `#<id>` reference) → reject: *"Session is closing — new bugs after 'done' are not accepted. Start a new QA session."*
 
@@ -236,20 +240,29 @@ If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`.
 
     <fixSummary>
     ```
-    Print: ``Checklist written: .checklist/qa-<id>.md — pick "Verify" below or run `/verify --qa <id>` later.``
-  - Call `AskUserQuestion`:
-    ```
-    question: "#<id> `<title>` ready.\n\nRoot cause: <rootCause>\nFix: <fixSummary>\n\nMerge into `<BASE_BRANCH>`?"
-    header:   "Review #<id>"
-    options:
-      - label: "Merge"   description: "Rebase + fast-forward merge (branch kept until you confirm)"
-      - label: "Verify"  description: "Run /verify --qa <id> against bug branch, then re-prompt"
-      - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
-    ```
-  - If "Merge" → run **merge-flow**
-  - If "Verify" → run **verify-flow**
-  - If "Re-fix" / Other (user typed feedback) → run **re-fix flow** (see Phase C)
-  - **Tie-breaker** (applies to **every** `AskUserQuestion` in coordinator, verify-flow, and merge-flow). If the user types a free-form description targeting `#<id>` while a prompt is open, the harness routes it as the `Other` answer (typed feedback). Treat `Other` as the closest re-fix-shaped option on the current prompt: **Re-fix** on the post-success and post-verify-pass prompts, **Re-fix** on the post-verify-fail prompt, **Cancel→Re-fix** on the tooling/error prompts (treat the typed text as a re-fix request), **Still broken** on the post-merge prompt. The `pending-review` → `fixing` transition happens once, not twice.
+  - **Branch on `AUTO_VERIFY`:**
+
+    - If `AUTO_VERIFY == true` (default — auto-verify path):
+      - Print: ``Checklist written: .checklist/qa-<id>.md``
+      - Print: ``#<id> <title> — fix committed; auto-verifying via /verify --qa <id>…``
+      - Run **verify-flow** Step 1 onward. Bug stays in `pending-review`; verify-flow's classification branches (4a/4b/4c/4d) own the merge/re-fix decision. Skip the post-success `AskUserQuestion` entirely.
+
+    - Else (`AUTO_VERIFY == false`, i.e. `--no-verify` was passed at session start — manual path):
+      - Print: ``Checklist written: .checklist/qa-<id>.md — pick "Verify" below or run `/verify --qa <id>` later.``
+      - Call `AskUserQuestion`:
+        ```
+        question: "#<id> `<title>` ready.\n\nRoot cause: <rootCause>\nFix: <fixSummary>\n\nMerge into `<BASE_BRANCH>`?"
+        header:   "Review #<id>"
+        options:
+          - label: "Merge"   description: "Rebase + fast-forward merge (branch kept until you confirm)"
+          - label: "Verify"  description: "Run /verify --qa <id> against bug branch, then re-prompt"
+          - label: "Re-fix"  description: "Describe what's wrong — agent re-fixes on same branch"
+        ```
+      - If "Merge" → run **merge-flow**
+      - If "Verify" → run **verify-flow**
+      - If "Re-fix" / Other (user typed feedback) → run **re-fix flow** (see Phase C)
+
+  - **Tie-breaker** (applies to **every** `AskUserQuestion` in coordinator, verify-flow, and merge-flow). If the user types a free-form description targeting `#<id>` while a prompt is open, the harness routes it as the `Other` answer (typed feedback). Treat `Other` as the closest re-fix-shaped option on the current prompt: **Re-fix** on the post-success prompt (only opens when `AUTO_VERIFY=false`) and post-verify-pass prompt, **Re-fix** on the post-verify-fail prompt, **Cancel→Re-fix** on the tooling/error prompts (treat the typed text as a re-fix request), **Still broken** on the post-merge prompt. The `pending-review` → `fixing` transition happens once, not twice.
 - `FAILED: <reason>` → `status=failed`, failureReason=reason. Then run coordinator queue-drain.
 - `TDD_SKIPPED: <reason>` → `status=failed`, failureReason=`TDD skipped: <reason>` **(hard fail, never retry)**. Then run coordinator queue-drain.
 
@@ -456,15 +469,19 @@ header:   "Verify #<id>"
 options:
   - label: "Show install hint"  description: "Print the install command from the verify report and re-prompt"
   - label: "Merge anyway"       description: "Tooling gap is unrelated to fix correctness"
-  - label: "Cancel"             description: "Stay on `pending-review`; pick Merge/Verify/Re-fix later"
+  - label: "Cancel"             description: "Stay on `pending-review`; re-run /verify --qa <id> manually later, then merge or re-fix"
 ```
 
 - "Show install hint" → echo the lines from `VERIFY_REPORT` between
   `Browser (MCP|pass) skipped:` and the next blank line, then re-prompt
   with the same options.
 - "Merge anyway" → merge-flow.
-- "Cancel" → return to the coordinator post-success prompt
-  (Merge / Verify / Re-fix) without re-running verify.
+- "Cancel" →
+  - If `AUTO_VERIFY == true`: leave bug in `pending-review` with no
+    follow-up prompt. User can resume by typing a free-form re-fix
+    description (Phase C) or running `/verify --qa <id>` manually.
+  - If `AUTO_VERIFY == false`: re-open the post-success Merge / Verify
+    / Re-fix prompt without re-running verify.
 - "Other" (typed feedback) → treat as Cancel + Re-fix: store typed text as
   re-fix feedback and run re-fix flow (Phase C).
 
@@ -476,7 +493,7 @@ header:   "Verify #<id>"
 options:
   - label: "Re-fix"        description: "Treat as re-fix; describe what to address"
   - label: "Merge anyway"  description: "Skip verify and merge"
-  - label: "Cancel"        description: "Stay on `pending-review`; pick Merge/Verify/Re-fix later"
+  - label: "Cancel"        description: "Stay on `pending-review`; re-run /verify --qa <id> manually later, then merge or re-fix"
 ```
 
 Routing analogous to 4c.
@@ -595,7 +612,7 @@ options:
   - `status=fixing`
   - Re-checkout `<branch>` in the main repo: `git -C "$REPO_ROOT" checkout <branch>`.
   - Spawn new explore+fix agent (`run_in_background: true`) on the **same branch** using agent-prompt with RE-FIX NOTE (see Phase C). `WORK_DIR=$REPO_ROOT`.
-  - When agent completes → back to coordinator (same flow: AskUserQuestion merge? → merge-flow → post-merge confirmation).
+  - When agent completes → back to coordinator. Under default `AUTO_VERIFY=true` the path is `SUCCESS → verify-flow → 4a Merge prompt → merge-flow → post-merge confirmation`; under `--no-verify` it falls back to `SUCCESS → Merge / Verify / Re-fix prompt → merge-flow → post-merge confirmation`.
 
 ---
 
@@ -652,8 +669,10 @@ BUGS APPROVED AND MERGED:
 |  3 | another-bug                 | src/__tests__/bar.test.ts    | def67890  | not-run  |
 
 The `Verify` column echoes the bug record's `verifyStatus`
-(`pass | fail | error | not-run`); `not-run` means the user merged without
-picking the Verify option in coordinator or verify-flow.
+(`pass | fail | error | not-run`). With auto-verify on (the default),
+approved bugs report `pass`, `fail`, or `error`. `not-run` means the
+session was started with `--no-verify` and the user merged manually,
+or a verify run was Cancelled before producing a result.
 
 BUGS THAT DID NOT PASS:
 ──────────────────────────────────────────────────────────────
