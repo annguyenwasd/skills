@@ -85,7 +85,7 @@ Otherwise detect from the project root (use `git rev-parse --show-toplevel` to f
 **Detection order — stop at the first match:**
 
 1. **`package.json` scripts** — look for scripts named `dev`, `start`, `serve`, `preview` in that priority order.
-   - Detect package manager: `pnpm-lock.yaml` → `pnpm run`; `yarn.lock` → `yarn`; else → `npm run`
+   - Detect package manager: `pnpm-lock.yaml` → `pnpm run`; `yarn.lock` → `yarn`; `bun.lockb` → `bun run`; else → `npm run`
    - Command: `<pm> run <script>`
 
 2. **`Procfile`** — if a `web:` entry exists, use the value after `web:`.
@@ -118,6 +118,12 @@ APP_PID=$!
 ```
 
 Set `APP_STARTED_BY_VERIFY=true`.
+
+Install an EXIT trap so the app is killed even if /verify aborts before Step 6:
+
+```bash
+trap 'if [ "$APP_STARTED_BY_VERIFY" = "true" ]; then kill "$APP_PID" 2>/dev/null; wait "$APP_PID" 2>/dev/null; fi' EXIT
+```
 
 ### 3c. Wait for ready
 
@@ -282,27 +288,37 @@ Skip entirely if:
 
 ### 5b-1. Playwright availability check
 
+Record the project root first — the Node check below and the browser subagent both use it:
+
+```bash
+PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+```
+
 Two checks must both succeed:
 
 ```bash
-# (a) Playwright Node package importable
-npx playwright --version 2>/dev/null
+# (a) Playwright CLI available (global @playwright/cli or npx fallback)
+npx --no-install playwright --version 2>/dev/null
 
-# (b) Chromium browser binary installed (path exists)
-node -e "require('playwright').chromium.executablePath()" 2>/dev/null
+# (b) Node import resolves from PROJECT_ROOT and chromium binary present
+(cd "$PROJECT_ROOT" && node -e "
+  const fs = require('fs');
+  const { chromium } = require('playwright');
+  fs.accessSync(chromium.executablePath());
+") 2>/dev/null
 ```
 
 If either check fails: print the following warning, then continue to Step 6 (UNVERIFIABLE items remain as-is):
 
 ```
-Browser pass skipped: Playwright not fully installed.
-To enable browser verification, install both the package and the chromium binary:
-  <pm> add -D playwright && npx playwright install chromium
+Browser pass skipped: Playwright CLI or local package missing, or chromium binary not installed.
+To enable browser verification:
+  npm i -g @playwright/cli         # CLI
+  <pm> add -D playwright           # local Node API
+  npx playwright install chromium  # browser binary
 ```
 
-Where `<pm>` is the package manager detected in Step 3a (`pnpm`/`yarn`/`npm`). If Step 3a did not run (app was already running when /verify started), re-detect: `pnpm-lock.yaml` → `pnpm add`; `yarn.lock` → `yarn add`; else → `npm install`. If no lock file: use `npm install`.
-
-Record the project root (`git rev-parse --show-toplevel`, falling back to `pwd`) as `PROJECT_ROOT` — the browser subagent will need it to resolve the `playwright` module from `/tmp`.
+Where `<pm>` is the package manager detected in Step 3a (`pnpm`/`yarn`/`npm`/`bun`). If Step 3a did not run (app already running when /verify started), re-detect from `PROJECT_ROOT` (not orchestrator cwd): `pnpm-lock.yaml` → `pnpm add`; `yarn.lock` → `yarn add`; `bun.lockb` → `bun add`; else `npm install`.
 
 ### 5b-2. Spawn subagent
 
@@ -350,13 +366,22 @@ fi
 
 Skip entirely if `--fix` was not passed, or if there are zero FAIL/TIMEOUT items.
 
+Resolve `BASE_BRANCH` once per /verify run (used by every fix agent's `gh pr create --base`):
+
+```bash
+BASE_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD --short 2>/dev/null | sed 's@^origin/@@')"
+[ -n "$BASE_BRANCH" ] || BASE_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
+```
+
 Parse FAIL and TIMEOUT items from the merged report (status cells `FAIL`, `TIMEOUT`, `FAIL (browser)`, or `TIMEOUT (browser)`). For each item **sequentially**:
 
-1. Derive a branch slug: lowercase kebab of first 6 words of item text, prefixed `verify-fix/`  
-   (e.g. `verify-fix/post-orders-invalid-payload-returns-400`)
+1. Derive a branch slug: lowercase kebab of first 6 words of item text, prefixed `verify-fix/` and suffixed with `-<N>` where `<N>` is the item number. The number suffix prevents collisions when two items share their first 6 words.
+   (e.g. item #3 → `verify-fix/post-orders-invalid-payload-returns-400-3`)
 2. Determine `BROWSER_ITEM`: `true` if the item's status cell ends in `(browser)`, else `false`. The fix-agent prompt short-circuits when `BROWSER_ITEM=true` (auto-fix not supported for browser-verified items).
-3. Spawn a foreground `general-purpose` Agent using verify-fix-agent-prompt
+3. Spawn a foreground `general-purpose` Agent using verify-fix-agent-prompt, passing `BASE_BRANCH` as `<base-branch>`
 4. Wait for completion before starting the next item
+
+Each fix agent has a hard wall-clock cap of **15 minutes**. If the agent does not return its `FIX_*` final line within 900s, the orchestrator records `FIX_FAILED: agent timeout (>15min)` for that item and moves on.
 
 After all fix agents complete, print:
 
