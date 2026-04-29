@@ -240,6 +240,13 @@ If missing → treat as `TDD_SKIPPED: no qa-fix marker in test diff`.
 
     <fixSummary>
     ```
+    Then ensure `.checklist/` is gitignored:
+    ```bash
+    # Ensure .checklist/ is gitignored (no-op outside a git repo)
+    if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+      grep -qxF '.checklist/' "$ROOT/.gitignore" 2>/dev/null || echo '.checklist/' >> "$ROOT/.gitignore"
+    fi
+    ```
   - **Branch on `AUTO_VERIFY`:**
 
     - If `AUTO_VERIFY == true` (default — auto-verify path):

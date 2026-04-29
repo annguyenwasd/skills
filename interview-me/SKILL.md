@@ -140,5 +140,13 @@ If not in a git repo, write to `./.checklist/interview-<YYYYMMDD-HHMMSS>.md`.
 - [ ] <observable behaviour>
 ```
 
-After writing, print one line:
+After writing, ensure `.checklist/` is gitignored:
+```bash
+# Ensure .checklist/ is gitignored (no-op outside a git repo)
+if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  grep -qxF '.checklist/' "$ROOT/.gitignore" 2>/dev/null || echo '.checklist/' >> "$ROOT/.gitignore"
+fi
+```
+
+Then print one line:
 `Checklist → .checklist/interview-<timestamp>.md  (use: /verify --checklist .checklist/interview-<timestamp>.md)`

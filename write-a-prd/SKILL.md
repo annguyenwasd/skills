@@ -141,7 +141,10 @@ Print one line:
 
 Add `.checklist/` to the project's `.gitignore` if not already present:
 ```bash
-grep -qxF '.checklist/' .gitignore 2>/dev/null || echo '.checklist/' >> .gitignore
+# Ensure .checklist/ is gitignored (no-op outside a git repo)
+if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
+  grep -qxF '.checklist/' "$ROOT/.gitignore" 2>/dev/null || echo '.checklist/' >> "$ROOT/.gitignore"
+fi
 ```
 
 <prd-template>

@@ -294,6 +294,20 @@ Record the project root first — the Node check below and the browser subagent 
 PROJECT_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 ```
 
+Derive the screenshot output directory from the checklist path and create it lazily (only reached when Step 5b actually runs — i.e. `--no-browser` was not passed and at least one item is UNVERIFIABLE):
+
+```bash
+CHECKLIST_DIR_ABS="$(cd "$(dirname "<checklist-path>")" && pwd)"
+CHECKLIST_STEM="$(basename "<checklist-path>" .md)"
+SCREENSHOT_DIR="$CHECKLIST_DIR_ABS/$CHECKLIST_STEM-screenshots"
+mkdir -p "$SCREENSHOT_DIR"
+rm -f "$SCREENSHOT_DIR"/item-*.png
+```
+
+The `rm -f` clears stale `item-*.png` files from prior runs of the same checklist — otherwise screenshots from previously-UNVERIFIABLE-but-now-curl-PASS items would linger and mislead the reviewer. Other files (if any) are left untouched.
+
+For example, `--qa 1` resolves to `.checklist/qa-1.md` → `SCREENSHOT_DIR=.checklist/qa-1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by /qa.
+
 Two checks must both succeed:
 
 ```bash
@@ -324,7 +338,7 @@ Where `<pm>` is the package manager detected in Step 3a (`pnpm`/`yarn`/`npm`/`bu
 
 Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using verify-browser-agent-prompt.
 
-Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, and `PROJECT_ROOT` (from 5b-1, needed for module resolution). No codebase context, no git history, no other lines from the report.
+Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, `PROJECT_ROOT` (from 5b-1, needed for module resolution), and `SCREENSHOT_DIR` (from 5b-1, where browser screenshots get written). No codebase context, no git history, no other lines from the report.
 
 After the subagent returns → **5b-3. Merge results** (below).
 
@@ -506,16 +520,17 @@ TOOL CONSTRAINTS — STRICT
 - Use Bash ONLY to write ONE script to /tmp and run it with node / npx.
 - DO NOT use Read, Grep, Glob, or Bash to access any project file.
 - DO NOT run: cat, ls, find, git, cd into any directory, or read any source file.
-- You may ONLY write to /tmp/verify-browser-<timestamp>.mjs — no other file paths.
+- You may ONLY write to /tmp/verify-browser-<timestamp>.mjs and PNG files inside <SCREENSHOT_DIR> — no other file paths. (Read-isolation is unchanged: still no project file reads.)
 - Infer all navigation paths from checklist text alone. If a path cannot be inferred,
   mark the item UNVERIFIABLE (browser) — do NOT read routes or components.
 
 ═══════════════════════════════════════════════════════
 CONNECTION
 ═══════════════════════════════════════════════════════
-BASE URL     : <base-url>
-TIMEOUT      : <timeout> seconds
-PROJECT_ROOT : <absolute path to repo where playwright is installed>
+BASE URL       : <base-url>
+TIMEOUT        : <timeout> seconds
+PROJECT_ROOT   : <absolute path to repo where playwright is installed>
+SCREENSHOT_DIR : <absolute path to <checklist-stem>-screenshots dir, pre-created>
 
 ═══════════════════════════════════════════════════════
 UNVERIFIABLE ITEMS TO RE-CHECK
@@ -533,13 +548,30 @@ delivery, server-side-only state): mark UNVERIFIABLE — <reason>. Move to next 
 
 ── STEP 2: WRITE PLAYWRIGHT SCRIPT ────────────────────
 Write a single Node.js script to /tmp/verify-browser-<timestamp>.mjs that:
+  - Declares the screenshot directory as a constant at the top of the script,
+    using the absolute path from the CONNECTION block:
+      const SCREENSHOT_DIR = '<absolute SCREENSHOT_DIR value verbatim>';
   - Uses `import { chromium } from 'playwright'`
   - Launches chromium headless: `const browser = await chromium.launch({ headless: true })`
   - Navigates to BASE URL (and sub-paths inferred from checklist text only)
   - Checks the relevant DOM state, visible text, or UI behaviour per item
+  - After each item's verification action and assertion completes, captures
+    a screenshot to <SCREENSHOT_DIR>/item-<n>.png (where n is the original
+    item number). Wrap the call in try/catch — a screenshot failure must NOT
+    change the item's status; on capture error, set a `screenshotOk: false`
+    flag on the result object and continue:
+      try {
+        await page.screenshot({
+          path: `${SCREENSHOT_DIR}/item-${n}.png`,
+          fullPage: true,
+        });
+        result.screenshotOk = true;
+      } catch (e) {
+        result.screenshotOk = false;
+      }
   - Prints one JSON result object per item to stdout:
     { "item": <number>, "status": "PASS"|"FAIL"|"TIMEOUT"|"ASSUMED"|"UNVERIFIABLE",
-      "evidence": "<≤100 chars>" }
+      "evidence": "<≤100 chars>", "screenshotOk": <true|false> }
   - Closes the browser and exits 0 regardless of result
 
 Run with PROJECT_ROOT in NODE_PATH so `playwright` resolves from the project's
@@ -565,12 +597,17 @@ OUTPUT — your final output must be EXACTLY these rows
 
 EVERY status MUST be suffixed with " (browser)" so the orchestrator can
 distinguish browser-pass results from curl-pass results in Step 7.
+
+EVIDENCE COLUMN — when the script's screenshot capture for an item
+succeeded (`screenshotOk: true`), append a single trailing tag to the
+evidence text: ` [screenshot: item-<#>.png]` where `<#>` is the item
+number. Omit the tag only when capture errored (`screenshotOk: false`).
 ═══════════════════════════════════════════════════════
 
-| <#> | <item text, max 60 chars> | PASS (browser) | Heading "Create account" visible at /register |
-| <#> | <...> | FAIL (browser) | Button disabled — expected enabled after valid input |
-| <#> | <...> | ASSUMED (browser) | "friendly message" inferred as non-empty p tag. Found ✓ |
-| <#> | <...> | TIMEOUT (browser) | Waited 30s for modal to close — still open |
+| <#> | <item text, max 60 chars> | PASS (browser) | Heading "Create account" visible at /register [screenshot: item-<#>.png] |
+| <#> | <...> | FAIL (browser) | Button disabled — expected enabled after valid input [screenshot: item-<#>.png] |
+| <#> | <...> | ASSUMED (browser) | "friendly message" inferred as non-empty p tag. Found ✓ [screenshot: item-<#>.png] |
+| <#> | <...> | TIMEOUT (browser) | Waited 30s for modal to close — still open [screenshot: item-<#>.png] |
 | <#> | <...> | UNVERIFIABLE (browser) | Cannot infer UI path from checklist text |
 ```
 
@@ -587,4 +624,5 @@ distinguish browser-pass results from curl-pass results in Step 7.
 - Browser pass re-verifies only `UNVERIFIABLE` items — never re-runs curl-verified results
 - Browser subagent has same code-isolation contract as the curl subagent; it may only write scripts to `/tmp`
 - Browser-pass rows always carry a `(browser)` suffix on their status — preserve it through merge so Step 7 can detect them
+- Browser pass writes one PNG per re-checked item to `<checklist-dir>/<checklist-stem>-screenshots/item-<#>.png` (e.g. `.checklist/qa-1-screenshots/item-3.png`). Folder is created lazily by Step 5b-1 — absent when `--no-browser` skips the pass. Files inherit the existing `.checklist/` gitignore line. A failed screenshot capture must NOT change item status; the evidence cell simply omits the `[screenshot: ...]` tag
 - Do not run two `/verify` invocations against the same project simultaneously — both will try to auto-start the app and race on the port
