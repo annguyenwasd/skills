@@ -296,9 +296,13 @@ mkdir -p "$SCREENSHOT_DIR"
 rm -f "$SCREENSHOT_DIR"/item-*.png
 ```
 
+**Screenshot folder naming (contract):** `SCREENSHOT_DIR` is always sibling to the checklist file: `<same-dir-as-checklist>/<checklist-stem>-screenshots`, where `<checklist-stem>` is the checklist filename without `.md`. The browser pass MUST use this directory only — do not invent a parallel screenshots folder from item text, PR branch names, or a re-derived slug.
+
 The `rm -f` clears stale `item-*.png` files from prior runs of the same checklist — otherwise screenshots from previously-UNVERIFIABLE-but-now-curl-PASS items would linger and mislead the reviewer. Other files (if any) are left untouched.
 
-For example, `--checklist .checklist/fix-<slug>-#1.md` resolves to `SCREENSHOT_DIR=.checklist/fix-<slug>-#1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by the upstream skill that produced the checklist.
+**`/fix` checklists:** upstream `/fix` must write `.checklist/fix-<slug>-#<N>.md`; then `--checklist` that path yields `SCREENSHOT_DIR` = `.checklist/fix-<slug>-#<N>-screenshots`. Example: `--checklist .checklist/fix-<slug>-#1.md` → `.checklist/fix-<slug>-#1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by the upstream skill that produced the checklist.
+
+Non-fix example: `--checklist .checklist/prd-123.md` → `SCREENSHOT_DIR` = `.checklist/prd-123-screenshots` (same stem rule).
 
 Mint a unique session name so concurrent CLI sessions (other `/verify` runs, manual debugging) don't collide on the same browser:
 
@@ -345,7 +349,7 @@ To enable browser verification:
 
 Collect UNVERIFIABLE items from the Step 5 report (item number + full item text). Spawn one `general-purpose` Agent (foreground) using verify-browser-agent-prompt.
 
-Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, `BROWSER_CMD` (from 5b-1, the resolved CLI invocation — `playwright-cli` or `npx playwright-cli`), `BROWSER_SESSION` (from 5b-1, scopes every CLI command), and `SCREENSHOT_DIR` (from 5b-1, where browser screenshots get written). No codebase context, no git history, no other lines from the report.
+Pass **only**: the UNVERIFIABLE items (numbered), the base URL, the timeout, `BROWSER_CMD` (from 5b-1, the resolved CLI invocation — `playwright-cli` or `npx playwright-cli`), `BROWSER_SESSION` (from 5b-1, scopes every CLI command), and `SCREENSHOT_DIR` (from 5b-1, stem-derived screenshots directory — see 5b-1 contract). No codebase context, no git history, no other lines from the report.
 
 After the subagent returns → **5b-3. Merge results** (below).
 
@@ -536,6 +540,7 @@ TOOL CONSTRAINTS — STRICT
 - Use Bash ONLY to invoke `<browser-cmd>` (the pre-resolved CLI from the CONNECTION block).
 - DO NOT use Read, Grep, Glob, or Bash to access any project file.
 - DO NOT run: cat, ls, find, git, cd into any project directory, or read source files.
+- Screenshots MUST go under `<SCREENSHOT_DIR>` exactly as provided (orchestrator pre-created `basename(checklist path without .md) + "-screenshots"` sibling to checklist). Never substitute a different directory or re-derive a slug from checklist wording / fix branch names.
 - You MAY only write files inside `/tmp/` and inside `<SCREENSHOT_DIR>` — no other paths.
 - DO NOT shell out to `node`, `npm`, or write `.mjs`/`.js` scripts. Drive everything
   through `playwright-cli` subcommands.
@@ -554,7 +559,7 @@ BASE URL         : <base-url>
 TIMEOUT          : <timeout> seconds
 BROWSER_CMD      : <browser-cmd>       (substitute verbatim — `playwright-cli` or `npx playwright-cli`)
 BROWSER_SESSION  : <browser-session>   (prepend `-s=<browser-session>` to every command)
-SCREENSHOT_DIR   : <absolute path to <checklist-stem>-screenshots dir, pre-created>
+SCREENSHOT_DIR   : <absolute path — orchestrator derives as dirname(checklist) + "/" + stem(checklist) + "-screenshots"; e.g. checklist .../fix-acme-widget-#1.md → .../fix-acme-widget-#1-screenshots>
 
 ═══════════════════════════════════════════════════════
 UNVERIFIABLE ITEMS TO RE-CHECK
@@ -639,5 +644,5 @@ where `<#>` is the item number. Omit the tag only when capture errored.
 - Browser pass re-verifies only `UNVERIFIABLE` items — never re-runs curl-verified results
 - Browser subagent has same code-isolation contract as the curl subagent; it drives `playwright-cli` only and may only write to `/tmp/` and `<SCREENSHOT_DIR>`
 - Browser-pass rows always carry a `(browser)` suffix on their status — preserve it through merge so Step 7 can detect them
-- Browser pass writes one PNG per re-checked item to `<checklist-dir>/<checklist-stem>-screenshots/item-<#>.png` (e.g. `.checklist/fix-<slug>-#1-screenshots/item-3.png`). Folder is created lazily by Step 5b-1 — absent when `--no-browser` skips the pass. Files inherit the existing `.checklist/` gitignore line. A failed screenshot capture must NOT change item status; the evidence cell simply omits the `[screenshot: ...]` tag
+- Browser pass writes one PNG per re-checked item to `<checklist-dir>/<checklist-stem>-screenshots/item-<#>.png` (e.g. `.checklist/fix-<slug>-#1-screenshots/item-3.png`). `<checklist-stem>-screenshots` is deterministic from the checklist path only (`basename` minus `.md` + `-screenshots`). For `/fix` runs, checklist filename must follow `fix-<slug>-#<N>.md` so screenshots land under `fix-<slug>-#<N>-screenshots`. Folder is created lazily by Step 5b-1 — absent when `--no-browser` skips the pass. Files inherit the existing `.checklist/` gitignore line. A failed screenshot capture must NOT change item status; the evidence cell simply omits the `[screenshot: ...]` tag
 - Do not run two `/verify` invocations against the same project simultaneously — both will try to auto-start the app and race on the port
