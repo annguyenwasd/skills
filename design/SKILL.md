@@ -1,6 +1,6 @@
 ---
 name: design
-description: Generate an HTML mockup for a screen/page before implementing it. Invoked explicitly as /design <feature-name>. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to ~/.design/<slug>/ and opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser). Asks for approval via AskUserQuestion before proceeding to code.
+description: Generate an HTML mockup for a screen/page before implementing it. Invoked explicitly as /design <feature-name>. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to ~/.design/<slug>/, serves them with live-server, and opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser). Asks for approval via AskUserQuestion before proceeding to code.
 argument-hint: <feature-name or description>
 ---
 
@@ -67,11 +67,20 @@ mkdir -p ~/.design/<slug>
 
 After the file exists on disk:
 
-1. **Resolve an absolute path** to the mockup (e.g. `realpath ~/.design/<slug>/vN.html` or expand `~` before building the URL). Do **not** put a literal `~/` inside a `file://` URL — use an absolute filesystem path instead.
-2. **Build `file:///...`** (three slashes after `file:`) from that absolute path — percent-encode reserved characters if the path contains them.
-3. **Open in Cursor’s embedded browser:** if the **`cursor-ide-browser`** MCP is available, inspect `browser_navigate`’s descriptor, then invoke it with `url`, **`position`: `"side"`** (preview beside the editor), **`newTab`: `true`** (avoid clobbering an unrelated tab).
+1. **Resolve the mockup directory and filename** (e.g. `DIR="$HOME/.design/<slug>"`, `FILE="vN.html"`). Do not build or use a `file://` URL for Cursor's embedded browser; the browser MCP only supports `http://` and `https://`.
+2. **Serve the mockup directory over localhost** using `npx live-server`:
 
-**Fallback** when MCP is unavailable (or `browser_navigate` fails — e.g. `file:` blocked): open with the OS default app using the resolved absolute path: macOS `open "$ABS_PATH"`, Linux `xdg-open "$ABS_PATH"` (Wayland/Linux without xdg-open: try `gio open`), Windows CMD `cmd /c start "" "$ABS_PATH"` — or paste the exact `file://` URL into the Cursor Simple Browser manually.
+```bash
+npx -y live-server "$HOME/.design/<slug>" --host=127.0.0.1 --port=<free-port> --no-browser
+```
+
+- Before starting, check whether a live-server process is already serving the same `~/.design/<slug>` directory; reuse it if possible instead of starting a duplicate.
+- Use a high, likely-free port such as `43117`; if it is occupied, choose another.
+- Start this as a background command and wait until the terminal output shows it is serving.
+
+3. **Open in Cursor’s embedded browser:** if the **`cursor-ide-browser`** MCP is available, inspect `browser_navigate`’s descriptor, then invoke it with `url`: `http://127.0.0.1:<port>/vN.html`, **`position`: `"side"`** (preview beside the editor), **`newTab`: `true`** (avoid clobbering an unrelated tab), and optionally `take_screenshot_afterwards`: `true` for visual confirmation.
+
+**Fallback** when `npx live-server` or the MCP browser is unavailable: open with the OS default app using the resolved absolute path: macOS `open "$ABS_PATH"`, Linux `xdg-open "$ABS_PATH"` (Wayland/Linux without xdg-open: try `gio open`), Windows CMD `cmd /c start "" "$ABS_PATH"` — and tell the user the browser MCP could not open the localhost preview.
 
 Tell the user:
 > Mockup saved to `~/.design/<slug>/vN.html` — opening in Cursor’s browser now.
