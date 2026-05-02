@@ -19,17 +19,17 @@ This skill will be invoked when the user wants to create a PRD. You may skip ste
 
    **Skip the interview** if the user already says "I just ran /grill-me" or "/interview-me" and pastes a Resolved Plan — proceed to Step 4 with that as the input.
 
-3.5. **Detect whether this PRD involves UI changes, and if so, draft ASCII wireframes.**
+3.5. **Detect whether this PRD involves UI changes, and if so, render HTML mockups via `/design`.**
 
 After completing the interview, scan the notes and conversation for these signals:
 
-**Triggers UI wireframe flow (any one is sufficient):**
+**Triggers UI flow (any one is sufficient):**
 - A new page or screen will be created
 - An existing page or screen will be visually modified
 - A new UI component, form, dialog, modal, or dashboard element will be added
 - The user explicitly mentions "design", "layout", "looks like", or "UI"
 
-**Skip UI wireframe flow (all of these apply):**
+**Skip UI flow (all of these apply):**
 - The change is API-only (new endpoint, changed contract, no frontend consumer)
 - The change is schema/migration-only
 - The change is an internal background job, worker, or CLI tool
@@ -39,53 +39,90 @@ After completing the interview, scan the notes and conversation for these signal
 - Question: "Does this PRD involve any changes to the UI (new pages, modified screens, new components)?"
 - Options: "Yes — includes UI changes" / "No — backend/API only"
 
-**If UI is involved — generate ASCII wireframes:**
+**If UI is involved — render HTML mockups, then capture screenshots, then upload them.**
 
 **Step A: Enumerate screens and states.**
 
-Before drawing, ask the user once:
-- Viewport: "Mobile, desktop, or both?" (AskUserQuestion: "Mobile only" / "Desktop only" / "Both — draw separate wireframes")
-- For each screen, enumerate which of these states apply: **default / empty / loading / error / over-limit / auth-locked / disabled-input**. Draw one wireframe per `(screen, state)` that is meaningfully different. Skip states that collapse into the default (e.g., a screen with no async data has no "loading").
+Before delegating, ask the user once:
 
-Define a stable **Screen ID** per screen — short PascalCase token (e.g. `Dashboard`, `OrderDetail`, `EditProfile`). This same ID MUST appear as: the `### Screen: <ID>` heading, every Mermaid `flowchart` node, and every `graph TD` state node. Do not drift.
+- Viewport: "Mobile, desktop, or both?" (AskUserQuestion: "Mobile only" / "Desktop only" / "Both — render both viewports")
+- For each screen, enumerate which of these states apply: **default / empty / loading / error / over-limit / auth-locked / disabled-input**. The states are illustrated within the same HTML mockup for that screen (side-by-side, tabbed, or with a visible state toggle). Skip states that collapse into the default (e.g., a screen with no async data has no "loading").
 
-**Step B: Draw the wireframes.**
+Define a stable **Screen ID** per screen — short PascalCase token (e.g. `Dashboard`, `OrderDetail`, `EditProfile`). This same ID MUST appear as: the `### Screen: <ID>` heading in the PRD body, every Mermaid `flowchart` node in `## Screen Flow`, and every `graph TD` state node in `## State Flow`. Do not drift. For auth-required screens, prefix the Screen ID with `🔒` in the heading (e.g. `### Screen: 🔒 Dashboard`).
 
-Conventions (apply to every wireframe):
-- **Width**: 60 chars. Mobile wireframes: 40 chars. Pad short rows; do not exceed width.
-- **Box drawing**: outer frame `┌─┐│└┘├┤`. Inner separators `├──┤`.
-- **Element annotation**:
-  - Buttons: `[ Label ]`
-  - Primary buttons: `[[ Label ]]`
-  - Inputs: `[__________]` (placeholder name inside underscores OK: `[_email____]`)
-  - Dropdowns: `[ Label ▼ ]`
-  - Checkboxes: `[ ]` unchecked, `[x]` checked
-  - Links: `<Label>`
-  - Image/avatar: `(img)` or `(avatar)`
-  - Auth-required marker: prefix Screen ID heading with `🔒` (e.g. `### Screen: 🔒 Dashboard`)
-- **Text labels**: write raw English. Add `i18n: <key>` suffix on the same line for any label that needs translation, e.g. `[ Save ]    i18n: orders.actionSave`. Wireframe-only static labels (e.g. `[Logo]`) need no key.
-- **Fallback**: If a screen is too visually complex for ASCII (data-viz canvas, drag-drop, complex tables with > 8 columns), replace the wireframe with a `<screen-prose>` block describing layout zones in plain English. Note the limitation; do not force ASCII.
+**Step B: Delegate rendering to `/design` (one invocation per Screen ID).**
 
-**Step C: Approval loop (max 3 rounds).**
+```bash
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+DESIGN_DIR="$REPO_ROOT/.design"
+mkdir -p "$DESIGN_DIR"
+```
 
-1. Present all wireframes to the user with AskUserQuestion:
-   - Question: "Do these wireframes look right?"
-   - Options: "Looks good — proceed" / "Needs changes"
-2. If "Needs changes": ask what to fix, revise, loop.
-3. After 3 revision rounds without approval, ask once: "Commit current wireframes and move on, defer UI to a later PRD, or keep iterating?" Default: commit.
+For each Screen ID (base PascalCase name; states are illustrated within the same HTML):
+
+1. Compute the kebab-case slug from the Screen ID (e.g. `OrderDetail` → `order-detail`, strip the `🔒` prefix).
+2. Invoke the `/design` skill with arguments `--path "$DESIGN_DIR" <screen-id-kebab>` and a brief description of the screen plus the states it must illustrate plus the chosen viewport(s).
+3. `/design` runs its own Step 4–6 approval loop, captures a screenshot with playwright-cli in Step 6.5, and prints exactly one final line:
+
+   ```
+   DESIGN_APPROVED slug=<slug> html=<absolute-html-path> png=<absolute-png-path-or-NONE>
+   ```
+
+4. Parse that line and record `(screenId, slug, htmlPath, pngPath)`. Read the HTML file contents into memory for embedding into the PRD body.
+5. If `png=NONE` (screenshot failed), continue but warn the user: the PRD will embed the local relative path instead of an image.
+
+**Step C: Upload screenshots to GitHub `user-attachments` via the `gh image` extension.**
+
+Once all screens are approved and screenshots are on disk, upload the PNGs so the PRD issue (and every `/ship-it` task issue) can render them inline.
+
+```bash
+gh extension list 2>/dev/null | grep -q "drogers0/gh-image" || \
+  gh extension install drogers0/gh-image
+
+GH_IMAGE_OK=1
+gh image check-token >/dev/null 2>&1 || {
+  echo "warn: gh image session token invalid; will fall back to local path embeds"
+  GH_IMAGE_OK=0
+}
+
+OWNER_REPO="$(gh repo view --json nameWithOwner --jq .nameWithOwner)"
+```
+
+For each `(screenId, pngPath)` where `pngPath != NONE`:
+
+```bash
+if [ "$GH_IMAGE_OK" = "1" ]; then
+  MD_LINE="$(gh image "$pngPath" --repo "$OWNER_REPO")" || MD_LINE=""
+  PNG_URL="$(printf '%s\n' "$MD_LINE" | sed -E 's/.*\((https:[^)]+)\).*/\1/')"
+fi
+```
+
+Notes:
+
+- `gh image` reads the user's GitHub session cookie from the local browser cookie store (Chrome/Brave/Edge/Firefox/Safari). On macOS the first run may trigger a Keychain prompt — surface that to the user and re-run if it fails.
+- Output URL is `https://github.com/user-attachments/assets/<uuid>` — same form as drag-and-drop. Inherits repo visibility (private repos stay private).
+- We do NOT use `gh image`'s default markdown verbatim — we re-wrap with our own alt text `![Screenshot Screen <ID>](<url>)` in the PRD body so future per-screen extraction can grep deterministically on the alt-text shape.
+- **Fallback** when `GH_IMAGE_OK=0` or any single upload returns non-zero: warn the user and embed the local relative path `(.design/<slug>/vN.png — not uploaded)` in place of the image markdown. `/ship-it` still sees the HTML and the path; the screenshot just won't render in the issue, and the user can drag-drop manually later.
 
 **Step D: Audit (optional but recommended).**
 
-After approval, ask: "Run /audit on the wireframes to check for missing states / ambiguous rules?" (default: yes for any feature with > 2 screens). If yes, invoke `/audit` skill against the wireframe set. Address findings, then re-confirm approval.
+After all screens are rendered and uploaded, ask: "Run /audit on the rendered HTML mockups to check for missing states / ambiguous rules?" (default: yes for any feature with > 2 screens). If yes, invoke `/audit` against the mockup set. If audit findings prompt changes, re-invoke `/design` for the affected Screen IDs (each `/design` call increments to a fresh `vN.html` and `vN.png`); re-upload via `gh image`; re-confirm approval.
 
 **Step E: Record outputs.**
 
-Record:
-- The final wireframe set (verbatim, embedded into `## UI Screens`).
-- Screen IDs list (used to populate `## Screen Flow` Mermaid nodes in Step 5).
-- Whether any screen has multi-step flow / async / retry / optimistic updates / wizard steps. If **any** screen does, populate `## State Flow` in Step 5; otherwise omit it.
+For every screen, record:
 
-No external tools, no Gist, no `/design` invocation. All content lives in the PRD issue body.
+- `screenId` (PascalCase, with `🔒` prefix for auth-required)
+- `slug` (kebab-case)
+- `htmlPath` (absolute path to approved `vN.html`)
+- `htmlContent` (full HTML file body, read into memory for embedding)
+- `pngPath` (absolute path to `vN.png` or `NONE`)
+- `pngAttachmentUrl` (https://github.com/user-attachments/... or empty if upload was skipped/failed)
+
+Also record:
+
+- The Screen ID list (drives `## Screen Flow` Mermaid nodes in Step 5).
+- Whether any screen has multi-step flow / async / retry / optimistic updates / wizard steps. If any does, populate `## State Flow` in Step 5; otherwise omit it.
 
 **If UI is NOT involved:** skip this step entirely and proceed to Step 4.
 
@@ -102,7 +139,7 @@ If any modules involve API calls from the frontend, enumerate the endpoints thos
 
 Document these agreements before writing the PRD.
 
-5. Once you have a complete understanding of the problem and solution, use the template below to write the PRD body. If wireframes were created in Step 3.5, embed them in the `## UI Screens` section and populate the `## Screen Flow` Mermaid block. If the feature has complex state transitions (loading/error/wizard steps/optimistic updates), also populate `## State Flow`. If no UI was involved, omit all three sections entirely.
+5. Once you have a complete understanding of the problem and solution, use the template below to write the PRD body. If HTML mockups were rendered in Step 3.5, embed them in the `## UI Screens` section using the per-screen shape (image + file ref + collapsible HTML) and populate the `## Screen Flow` Mermaid block. If the feature has complex state transitions (loading/error/wizard steps/optimistic updates), also populate `## State Flow`. If no UI was involved, omit all three sections entirely.
 
 **Preview before creating.** Render the full PRD body to the user and ask for approval (use AskUserQuestion: "Looks good — create issue" / "Needs edits"). Iterate on edits until approved. Only then proceed to create the GitHub issue.
 
@@ -139,11 +176,15 @@ EOF
 Print one line:
 `Checklist → .checklist/prd-<ISSUE_NUMBER>.md  (use: /verify --checklist .checklist/prd-<ISSUE_NUMBER>.md)`
 
-Add `.checklist/` to the project's `.gitignore` if not already present:
+Add `.checklist/` and `.design/` to the project's `.gitignore` if not already present:
+
 ```bash
-# Ensure .checklist/ is gitignored (no-op outside a git repo)
+# Ensure .checklist/ and .design/ are gitignored (no-op outside a git repo).
+# .design/ holds locally-rendered HTML mockups + screenshots from /design — never committed.
 if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
-  grep -qxF '.checklist/' "$ROOT/.gitignore" 2>/dev/null || echo '.checklist/' >> "$ROOT/.gitignore"
+  for entry in .checklist/ .design/; do
+    grep -qxF "$entry" "$ROOT/.gitignore" 2>/dev/null || echo "$entry" >> "$ROOT/.gitignore"
+  done
 fi
 ```
 
@@ -157,39 +198,62 @@ The problem that the user is facing, from the user's perspective.
 
 The solution to the problem, from the user's perspective.
 
-<!-- CONDITIONAL: Only include the following three sections if wireframes were generated in Step 3.5. Omit entirely for non-UI PRDs. -->
+<!-- CONDITIONAL: Only include the following three sections if HTML mockups were rendered in Step 3.5. Omit entirely for non-UI PRDs. -->
 
 ## UI Screens
 
-<!-- One ASCII wireframe per distinct (screen, state) pair from Step 3.5.
-     Heading = Screen ID. Same ID appears in Screen Flow and State Flow nodes.
-     Auth-required: prefix with 🔒. -->
+<!-- One block per Screen ID. Heading text is the Screen ID (PascalCase, prefix 🔒 if auth-required).
+     States (default / empty / loading / error / ...) are illustrated WITHIN the same HTML mockup —
+     do NOT create separate ### Screen: blocks per state.
+
+     Each block has a fixed three-part shape so /ship-it can copy a single screen verbatim:
+       1. Screenshot image (rendered via gh image, user-attachments URL).
+          Line starts with ![Screenshot Screen <ID>] — the alt-text marker is required.
+          If the upload was skipped/failed, write the local path instead:
+            (.design/<slug>/vN.png — not uploaded)
+       2. Mockup file reference — line starts with `Mockup file: ` (local .design/ path, gitignored).
+       3. <details> ... </details> — collapsible HTML mockup, fenced as a `html` code block.
+
+     Do NOT reorder these three parts; do NOT mix screens; keep one blank line between parts. -->
 
 ### Screen: Dashboard
 
-```
-┌──────────────────────────────────────────────────────────┐
-│  [Logo]                                  [ User ▼ ]      │
-├──────────────────────────────────────────────────────────┤
-│                                                          │
-│   <Stats card>          <Chart card>                     │
-│                                                          │
-│   ┌────────────────────────────────────────────────┐     │
-│   │  Recent Orders (table)                         │     │
-│   └────────────────────────────────────────────────┘     │
-│                                                          │
-│   [[ New Order ]]   [ Export ]   i18n: orders.export     │
-└──────────────────────────────────────────────────────────┘
+![Screenshot Screen Dashboard](https://github.com/user-attachments/assets/<uuid>)
+
+Mockup file: `.design/dashboard/v2.html` (rendered locally; gitignored)
+
+<details>
+<summary>HTML mockup — Screen Dashboard</summary>
+
+```html
+<!DOCTYPE html>
+<html>...full mockup contents...</html>
 ```
 
-### Screen: Dashboard — empty state
+</details>
 
+### Screen: 🔒 OrderDetail
+
+![Screenshot Screen OrderDetail](https://github.com/user-attachments/assets/<uuid>)
+
+Mockup file: `.design/order-detail/v1.html`
+
+<details>
+<summary>HTML mockup — Screen OrderDetail</summary>
+
+```html
+<!DOCTYPE html>
+...
 ```
-┌──────────────────────────────────────────────────────────┐
-│  No orders yet.                                          │
-│  [[ Create your first order ]]                           │
-└──────────────────────────────────────────────────────────┘
-```
+
+</details>
+
+<!-- Body-size guard: GitHub issue body limit is 65 KB. After assembling all screen blocks
+     (plus everything else in the PRD), if the total exceeds 60 KB, drop the inner HTML from the
+     largest <details> blocks first (keep the image + Mockup file: line) until the body fits.
+     Warn the user listing which screens had their HTML dropped. The screenshot stays — that is
+     the visual contract /ship-it consumes. -->
+
 
 ## Screen Flow
 
