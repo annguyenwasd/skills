@@ -1,22 +1,24 @@
 ---
 name: fix
-description: Single-shot bug fixer. Fixes one bug inline on the current branch using strict TDD — no queue, no separate branch, no subagent. Writes a per-attempt checklist (`.checklist/fix-<slug>-#<try>.md`), runs /verify against it in the foreground, allows one re-fix on verify failure, then prompts the user to confirm. Use when the user wants a single bug fixed end-to-end on the current branch in the current session, mentions "fix this", or invokes /fix.
+description: Single-shot bug fixer. Fixes one bug inline on the current branch using strict TDD — no queue, no separate branch, no subagent. Writes a per-attempt checklist (`.checklist/fix-<slug>-#<try>.md`), runs /verify against it in the foreground, allows one re-fix on verify failure, prompts the user to confirm, then optionally (AskUserQuestion) creates a GitHub issue, posts the fix commit and links as comments, adds `fix-issue:` next to the `fix:<slug>-#N` marker, commits, and closes the issue. Use when the user wants a single bug fixed end-to-end on the current branch in the current session, mentions "fix this", or invokes /fix.
 model: opus
-argument-hint: "(--no-verify) (<bug description>)"
+argument-hint: "(--no-verify) (--no-issue) (<bug description>)"
 ---
 
 # /fix — Single-Shot Bug Fixer
 
-Fix exactly one bug end-to-end in the current session, on the current branch, in the main conversation (no subagent). One TDD cycle, one foreground `/verify --checklist <path>` against the per-attempt checklist this skill writes, optional one re-fix on verify failure, one confirmation prompt, done.
+Fix exactly one bug end-to-end in the current session, on the current branch, in the main conversation (no subagent). One TDD cycle, one foreground `/verify --checklist <path>` against the per-attempt checklist this skill writes, optional one re-fix on verify failure, one confirmation prompt, then an optional GitHub issue + marker link when the session ends (see Step 7).
 
 ## Arguments
 
 - `--no-verify` — skip the automatic `/verify --checklist <path>` step after the fix. Jump straight to the confirm prompt.
+- `--no-issue` — skip Step 7 entirely (no `AskUserQuestion`, no `gh` calls).
 - `<bug description>` — free-form description; everything after the flags is treated as the bug. Optional; if omitted, ask once.
 
 Parse at start. Store as:
 
 - `AUTO_VERIFY` — boolean; default `true`. Set `false` when `--no-verify` is present.
+- `AUTO_ISSUE` — boolean; default `true`. Set `false` when `--no-issue` is present.
 - `BUG_DESC` — string; may be empty.
 
 ## Step 1 — Prechecks
@@ -118,19 +120,14 @@ Additions on top of the TDD skill:
 
 - **Marker.** Add `${MARKER}` as a comment on the line IMMEDIATELY ABOVE the new test definition (the `test()` / `it()` / `describe(...)` block in JS, `def test_xxx()` in Python, `#[test]` in Rust, `func TestXxx()` in Go, etc.). Required. Without it the fix is rejected as TDD_SKIPPED.
 - **No fallback if you cannot write a failing test.** Print exactly one line and stop:
-
   ```
   TDD_SKIPPED: <one-sentence reason>
   ```
-
   No partial fix without a red test first. Make no commit. Final status: `FAILED`. Skip Step 4 and Step 5 entirely; jump to Step 6 (summary).
-
 - **Regression in full suite.** If the full suite fails because of your change after refactor, revert your edits and print:
-
   ```
   FAILED: regression in full test suite — <file:line>
   ```
-
   Make no commit. Final status: `FAILED`. Jump to Step 6.
 
 ### Commit
@@ -325,25 +322,20 @@ Triggered only by `Re-fix` (or typed feedback) on the post-verify-fail prompt, a
 
 1. Set the re-fix-attempted flag and bump `ATTEMPT=2`. Recompose the marker for this attempt: `MARKER="${COMMENT_PREFIX} fix:${title}-#2"`.
 2. Build the re-fix feedback string:
-
-   ```
+  ```
    Verify reported failures (from /verify --checklist .checklist/fix-${title}-#1.md):
    <the "Items Requiring Attention" block from VERIFY_REPORT verbatim;
     if absent, substitute the failing rows from the verify result table>
 
    User notes: <typed feedback if any, else omit this line>
-   ```
-
+  ```
 3. Run another TDD cycle inline (same Step 3 protocol) on the same branch, with one extra constraint:
-
-   - The user feedback describes a **new** failing scenario the previous fix did not cover.
-   - Write a **new** failing test for that scenario (must genuinely RED against current code) with its own `${MARKER}` (i.e. `fix:${title}-#2`) on the line above. New test, new marker value. The original `#1` test and its marker stay in place — Step 4b adds a second test, it does not replace the first.
-   - Then GREEN, then REFACTOR. Commit normally — this becomes a second commit on `CURRENT_BRANCH`.
-   - If feedback is too vague to derive a concrete failing test, ask once for a concrete reproduction. If still impossible → `TDD_SKIPPED`, final status `FAILED`, jump to Step 6.
-
+  - The user feedback describes a **new** failing scenario the previous fix did not cover.
+  - Write a **new** failing test for that scenario (must genuinely RED against current code) with its own `${MARKER}` (i.e. `fix:${title}-#2`) on the line above. New test, new marker value. The original `#1` test and its marker stay in place — Step 4b adds a second test, it does not replace the first.
+  - Then GREEN, then REFACTOR. Commit normally — this becomes a second commit on `CURRENT_BRANCH`.
+  - If feedback is too vague to derive a concrete failing test, ask once for a concrete reproduction. If still impossible → `TDD_SKIPPED`, final status `FAILED`, jump to Step 6.
 4. After the second commit, write a NEW checklist file at `.checklist/fix-${title}-#2.md` (do NOT overwrite `#1.md` — it stays as the audit trail of the first attempt). Re-run `/verify --checklist .checklist/fix-${title}-#2.md` (Step 4 verify subagent invocation again), classify the result, and **fall through to Step 5 unconditionally** — no second re-fix prompt regardless of the new classification. Record the second classification as `VERIFY_STATUS`.
-
-   The TDD enforcement check on the new commit greps for `fix:${title}-#2\b`; the `#1` marker still exists in the diff, but Step 4b only cares that `#2` is present.
+  The TDD enforcement check on the new commit greps for `fix:${title}-#2\b`; the `#1` marker still exists in the diff, but Step 4b only cares that `#2` is present.
 
 ## Step 5 — Confirm
 
@@ -360,9 +352,9 @@ options:
 - `Confirmed fixed` → final status `APPROVED`, jump to Step 6.
 - `Still broken` / `Other` → final status `FAILED`, jump to Step 6. Treat any typed feedback as a note in the summary line, but do **not** spawn another re-fix from this prompt — the user re-invokes `/fix` with a refined description for that.
 
-## Step 6 — Summary line and exit
+## Step 6 — Summary line
 
-Always exit with exactly one line:
+Always print exactly one line:
 
 ```
 #${ATTEMPT} <title> — <APPROVED|FAILED> (verify: <VERIFY_STATUS>) — commit <short-hash> on <CURRENT_BRANCH> — checklist .checklist/fix-${title}-#${ATTEMPT}.md
@@ -373,16 +365,136 @@ Where:
 - `${ATTEMPT}` is the latest attempt the orchestrator ran (1 if Step 4b never fired, 2 if it did).
 - `<short-hash>` is the first 8 chars of `COMMIT_HASH` (the most recent commit produced — Step 4b's commit if a re-fix happened, else Step 3's). `none` if no commit was produced.
 - `<VERIFY_STATUS>` is `pass | fail | tooling | error | not-run | skipped` (use `skipped` when `--no-verify` was passed).
-- If `TDD_SKIPPED` or pre-commit `FAILED` produced no commit, write `commit none on <CURRENT_BRANCH>` and add ` — reason: <one-line reason>` to the end. If no checklist file was written either (Step 4 never reached), drop the trailing ` — checklist …` clause.
+- If `TDD_SKIPPED` or pre-commit `FAILED` produced no commit, write `commit none on <CURRENT_BRANCH>` and add  `— reason: <one-line reason>` to the end. If no checklist file was written either (Step 4 never reached), drop the trailing  `— checklist …` clause.
 
-The commit (when present) is left on `CURRENT_BRANCH`. No branch deletion. No GitHub issue. No queue drain. The `/fix` invocation ends here.
+Then continue to Step 7 when applicable (do not treat Step 6 as full exit until Step 7 completes or is skipped).
+
+## Step 7 — Optional GitHub issue (session end)
+
+Run only when **all** are true:
+
+- `AUTO_ISSUE == true` (`--no-issue` not passed)
+- `FINAL_STATUS == APPROVED` (user chose "Confirmed fixed" in Step 5)
+- A fix commit exists (`COMMIT_HASH` set — not the `commit none` path)
+
+Otherwise skip Step 7 entirely and stop after Step 6.
+
+### 7a — Ask
+
+Call `AskUserQuestion` (same mechanism as the protected-branch and verify prompts):
+
+```
+question: "Create a GitHub issue for this fix, post the commit there, add the issue link next to the fix marker in code, then close the issue?"
+header:   "Track fix on GitHub"
+options:
+  - label: "Yes, create issue"  description: "Create issue, comment commit + links, link in source, close issue"
+  - label: "No, skip"            description: "End session — no GitHub"
+```
+
+`No, skip` / `Other` → stop. No `gh` calls.
+
+### 7b — Preflight GitHub CLI
+
+Mirror `write-a-prd` style checks before any mutation:
+
+Probe `gh`: binary exists and `gh auth status` succeeds. If either fails, print one line (`Skip GitHub: …`), stop Step 7.
+
+Resolve default repo for `gh issue create` from `REPO_ROOT` (`cd "$REPO_ROOT"` first). If `gh repo view` fails (no remote / not a GitHub repo), print one line and stop Step 7.
+
+Store `PRIMARY_COMMIT` = `COMMIT_HASH` (latest fix commit). If Step 4b ran, optionally note the first fix commit in the issue body as `Prior attempt: <short-hash of HEAD~1>` when `ATTEMPT == 2`.
+
+### 7c — Create issue
+
+```bash
+cd "$REPO_ROOT"
+ISSUE_URL=$(gh issue create \
+  --title "fix: <title>" \
+  --body "## Context
+
+**Expected:** <expectedBehaviour>
+
+**Actual (before fix):** <actualBehaviour>
+
+**Branch:** \`<CURRENT_BRANCH>\`
+**Latest fix commit:** \`<PRIMARY_COMMIT>\`
+**Verify:** <VERIFY_STATUS>
+**Checklist:** \`.checklist/fix-${title}-#${ATTEMPT}.md\`
+")
+```
+
+Extract `ISSUE_NUMBER` from `ISSUE_URL` (trailing digits).
+
+### 7d — Comment 1: commit
+
+Post the fix commit to the issue (body = full commit message + hash; add a GitHub commit URL when the remote is `github.com`):
+
+```bash
+COMMIT_SUBJECT=$(git -C "$REPO_ROOT" show -s --format=%s "$PRIMARY_COMMIT")
+gh issue comment "$ISSUE_NUMBER" --body "## Fix commit
+
+**Subject:** ${COMMIT_SUBJECT}
+
+\`\`\`
+$(git -C "$REPO_ROOT" show -s --format=medium "$PRIMARY_COMMIT")
+\`\`\`
+"
+```
+
+### 7e — Comment 2: links
+
+Second comment: make traceability obvious — include **issue URL** and **commit permalink** (from `gh browse --no-browser "$PRIMARY_COMMIT" 2>/dev/null` or equivalent), and if available a **blob URL** to the test file at `PRIMARY_COMMIT`:
+
+```
+gh issue comment "$ISSUE_NUMBER" --body "## Links
+
+- **This issue:** ${ISSUE_URL}
+- **Fix commit on GitHub:** <permalink or \`n/a\` if not resolve>
+- **Test file (marker):** <blob URL to test file at PRIMARY_COMMIT, or file path if URL unknown>
+"
+```
+
+### 7f — Link in source next to the marker
+
+1. Find the test file(s) that contain the marker for this attempt: search for `fix:${title}-#${ATTEMPT}` in the tree (the line immediately above the test must already contain `${MARKER}` from Step 3 / 4b).
+2. On the line **immediately after** the `${MARKER}` line (or immediately after the opening `test`/`it` line if the marker is inside a block — prefer **directly under** the marker line), add:
+  ```
+   ${COMMENT_PREFIX} fix-issue: <ISSUE_URL>
+  ```
+   If the next line is already a comment starting with `fix-issue:`, replace its URL instead of duplicating.
+3. Stage only that file and commit:
+  ```bash
+   git add "<test-file>"
+   git commit -m "chore: link fix:${title}-#${ATTEMPT} to GitHub issue #${ISSUE_NUMBER}"
+  ```
+   Store `TRACKING_COMMIT` = new HEAD hash. Never `git add .`.
+
+### 7g — Close the issue
+
+Close with a short comment pointing at the fix and the tracking commit:
+
+```bash
+gh issue close "$ISSUE_NUMBER" --comment "Addressed in commit ${PRIMARY_COMMIT}. Marker link added in ${TRACKING_COMMIT}."
+```
+
+### 7h — Final line
+
+Print one more line after Step 6 output:
+
+```
+GitHub: issue #${ISSUE_NUMBER} ${ISSUE_URL} (closed) — tracking commit <first-8-of-TRACKING_COMMIT>
+```
+
+If Step 7 aborted mid-way after creating an issue, print `GitHub: partial — <one-line state>` instead of failing silently.
+
+The fix commits and tracking commit stay on `CURRENT_BRANCH`. Never push to remote — the user pushes when they are happy. No queue drain.
 
 ## Rules
 
 - Never push to remote — the user pushes when they are happy.
 - Never spawn background agents — TDD work runs in the main conversation. The only foreground subagent allowed is the `/verify --checklist <path>` runner in Step 4.
-- Never file GitHub issues — `/fix` is local-only by design.
+- Do not file GitHub issues unless Step 7 ran and the user chose **Yes, create issue** — otherwise `/fix` stays local-only.
 - Never run more than one inline re-fix per `/fix` invocation.
 - Never auto-stash, auto-rebase, or auto-resolve conflicts — abort instead.
 - Never call `git add .` or `git add -A` — stage explicit files.
 - The TDD marker is `fix:<slug>-#<try>`; the slug must match the kebab title and the try must match the attempt counter so the enforcement check finds the marker in the test diff.
+
