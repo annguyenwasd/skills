@@ -135,19 +135,21 @@ After producing the Resolved Plan (normal mode) or the full structured summary (
 **What to include:** for each decision or rule in the Resolved Plan that describes observable app behaviour, write one checklist item in acceptance-test form:
 `Given [initial state/context], when [event/action], then [expected observable behaviour]`
 
+Make each item specific enough for `/verify` to check without code access: include the page/path for UI flows, the exact control or user action, and the exact visible text, API status, field, redirect, or state change expected.
+
 Include behaviour a user, browser test, or HTTP API can observe. This includes API responses, UI flows, component states, form validation, API errors shown in the UI, and persisted outcomes visible through later app/API reads.
 
 Skip architectural decisions, "how it's built" items, and anything that can't be observed from the outside. Do not include database indexes, table structure, internal queues, component names, hooks, CSS class names, or pure visual styling unless it affects user behaviour.
 
 **Examples:**
 
-- **API:** `Given a cashier is submitting a refund over $500, when they submit without manager approval, then the API returns 422 with message "Manager approval required"`
+- **API:** `Given a cashier is submitting a refund over $500 to POST /refunds, when they submit without manager approval, then the API returns 422 with message "Manager approval required"`
 - **API:** `Given two users are editing the same order, when the second user saves after the first user's changes, then the API returns 409 conflict`
 - **Data effect:** `Given a user updates their email successfully, when their profile is fetched again, then the new email is returned`
-- **UI state:** `Given a user has completed a valid form, when they click Submit, then the Submit button is disabled until the request finishes`
-- **Validation:** `Given the email field is empty, when the user leaves the field or submits the form, then the form shows "Email is required"`
-- **Validation:** `Given the API rejects a submitted coupon code, when the response returns, then the form shows the coupon error and keeps the user's entered values`
-- **Flow:** `Given signup succeeds, when account creation finishes, then the user lands on onboarding step 1`
+- **UI state:** `Given a user is on /checkout with a valid payment form, when they click "Pay now", then the "Pay now" button is disabled until the request finishes`
+- **Validation:** `Given a user is on /login and the email field is empty, when they click "Sign in", then the form shows "Email is required"`
+- **Validation:** `Given a user is on /checkout and the API rejects coupon SAVE10, when the response returns, then the coupon field shows "Coupon is not valid" and the form keeps the entered values`
+- **Flow:** `Given a visitor completes signup successfully on /signup, when account creation finishes, then they are redirected to /onboarding/step-1`
 - **Flow:** `Given a modal has unsaved changes, when the user presses Escape, then the modal closes only after confirming they want to discard changes`
 
 **Slug derivation:** kebab-case the plan/topic from the input (e.g. "Loyalty Program" → `loyalty-program`). If the input is a file path, use the file's basename without extension, kebab-cased. If still unclear, ask the user once for a slug before writing.
