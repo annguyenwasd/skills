@@ -1,6 +1,6 @@
 ---
 name: design
-description: Generate an HTML mockup for a screen/page before implementing it. Invoked explicitly as /design [--path <dir>] <feature-name>. Spawns one readonly Explore subagent to discover the frontend package, all DESIGN.md files repo-wide, and representative pages; parent reads those artifacts before generating HTML. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to <base-dir>/<slug>/ (default ~/.design/, override with --path), serves them with live-server, opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser), captures a screenshot via playwright-cli, and asks for approval via AskUserQuestion before proceeding to code.
+description: Generate an HTML mockup for a screen/page before implementing it. Invoked explicitly as /design [--path <dir>] <feature-name>. Spawns one readonly Explore subagent to discover the frontend package, all DESIGN.md files repo-wide, and representative pages; parent reads those artifacts before generating HTML. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to <base-dir>/<slug>/ (default .design in the current working directory; interview-me callers write beside INTERVIEW.md; override with --path), serves them with live-server, opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser), captures a screenshot via playwright-cli, and asks for approval via AskUserQuestion before proceeding to code.
 argument-hint: "[--path <dir>] <feature-name or description>"
 ---
 
@@ -16,8 +16,13 @@ Parse the invocation arguments before doing anything else:
 Resolve the base directory:
 
 ```bash
-# Default
-BASE_DIR="$HOME/.design"
+# Default for direct /design calls
+BASE_DIR="$PWD/.design"
+
+# If interview-me passed an interview checklist path, write beside INTERVIEW.md
+if [ -n "$INTERVIEW_CHECKLIST_PATH" ]; then
+  BASE_DIR="$(cd "$(dirname "$INTERVIEW_CHECKLIST_PATH")" && pwd)"
+fi
 
 # If --path was passed, replace BASE_DIR with the resolved value
 if [ -n "$PATH_FLAG" ]; then
@@ -31,7 +36,7 @@ fi
 mkdir -p "$BASE_DIR"
 ```
 
-Throughout the rest of this skill, every reference to `~/.design/<slug>/` means `$BASE_DIR/<slug>/`. Direct user invocations without `--path` keep the legacy `~/.design/` location for backward compatibility; callers may pass `--path "$(git rev-parse --show-toplevel)/.design"` to keep mockups inside the repo.
+Throughout the rest of this skill, every reference to a mockup directory means `$BASE_DIR/<slug>/`. Direct `/design` invocations without `--path` write to `<current-working-directory>/.design/<slug>/`; `interview-me` callers write to the same directory as `INTERVIEW.md`; `--path` overrides both.
 
 ## Step 1 — Explore codebase (Explore subagent)
 
