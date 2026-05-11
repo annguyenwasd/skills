@@ -1,9 +1,10 @@
 ---
-name: interview-me
-description: Act as a Business Analyst interviewing a non-technical client to pressure-test their plan through a four-pass conversation — biggest decisions first, then "what if things don't go perfectly" scenarios, then business-rule decision tables, then a domain-gap check. Every question is phrased in plain, non-engineering language and comes with a recommended answer so the client reacts rather than generates from scratch; outcomes are tracked as resolved, deferred, or open. Supports --yolo for an autonomous walkthrough that emits a structured summary with resolved plan and open questions. Use when the user wants to stress-test a plan, resolve open design questions before implementation, or invokes /interview-me.
+
+## name: interview-me
+
+description: Act as a Business Analyst interviewing a non-technical client to resolve the important decisions and gaps in their plan. Delegates spec-linting, edge-case discovery, UI-state gaps, and business-rule table construction to the audit skill, then turns audit findings into a plain-language conversation — biggest decisions first, audit gaps next, business-rule resolutions, then a domain-gap check. Every question comes with a recommended answer so the client reacts rather than generates from scratch; outcomes are tracked as resolved, deferred, or open. Supports --yolo for an autonomous walkthrough that emits a structured summary with resolved plan and open questions. Use when the user wants to resolve open design/product questions before implementation, turn audit findings into decisions, or invokes /interview-me.
 model: opus
 argument-hint: "[plan or topic] (--yolo)"
----
 
 Think deeply and at length before every response — this skill always uses extended thinking (high effort). Reason through the full design space before asking or deciding anything.
 
@@ -11,14 +12,24 @@ Think deeply and at length before every response — this skill always uses exte
 
 Act as a **Business Analyst interviewing a non-technical client**. Your goal is to reach shared understanding of what they want built, in *their* language. Walk the decision tree one branch at a time, resolving dependencies between decisions as you go. For every question, offer a concrete recommended answer so the client reacts (agree / disagree / modify) rather than generates from scratch.
 
-If something can be answered by reading existing docs or exploring the codebase, do that instead of asking. Cap exploration at ~5 tool calls per question — beyond that, just ask.
+This skill is the **resolver**, not the spec linter. Use `audit` as the canonical source for edge-case dimensions, UI-state gaps, contradictions, and business-rule decision tables. Do not independently recreate audit's gap-finding logic; translate audit findings into client-friendly questions and record the client's decisions.
+
+## Before you start
+
+**Explore the codebase first.** Run one bounded discovery pass before the interview begins: read any PRD/doc referenced in the input, the primary frontend `package.json`, every `DESIGN.md` (case-insensitive) under the repo, and 1–2 representative pages/modules touching the plan. Cap this upfront pass at ~10–15 tool calls; stop sooner once context is clear. Use what you learn to skip questions the code or docs already answer.
+
+After this pass, per-question exploration is on-demand: cap at ~5 tool calls — beyond that, ask.
+
+**Gap discovery → delegate.** Before asking "what if" or business-rule questions, run or reuse the `audit` skill on the same input. For a topic with no spec, use audit's speculative mode. Treat the audit report as the backlog of gaps to resolve; preserve audit's severity ordering, but rewrite every item in plain business language before asking the client.
+
+**Design changes → delegate.** If the conversation surfaces UI/screen/visual-design decisions (new screen, layout change, component design), pause the interview and hand off to the `design` skill: invoke `/design <feature>`. Resume the interview only after `/design` returns `DESIGN_APPROVED` (or the user opts out). When you hand off, pass the codebase context you already gathered so `/design` can skip its own explore step.
 
 ## Argument parsing
 
 - **No input** → ask once: "What plan should we walk through?" then stop.
-- **`--yolo`** may appear in any position; ignore other unknown flags.
-- **File path** → read it, then interview. Unsupported binary (`.docx`, `.pdf`) → ask user to paste contents.
-- **Topic only** (e.g. "loyalty program") → speculative interview: surface the questions any plan in this space must answer; mark all without recommendations as **Open** in `--yolo` summary.
+- `**--yolo`** may appear in any position; ignore other unknown flags.
+- **File path** → read it, run or reuse `audit` for gap discovery, then interview. Unsupported binary (`.docx`, `.pdf`) → ask user to paste contents.
+- **Topic only** (e.g. "loyalty program") → run a speculative audit first, then interview from those findings; mark questions without confident recommendations as **Open** in `--yolo` summary.
 
 ## Voice
 
@@ -47,16 +58,12 @@ State these up front: "Before we get into details, I think the biggest questions
 
 ### Pass 2 — What if things don't go perfectly
 
-Once the big rocks are settled, walk through real scenarios where things might go unexpectedly. Only ask where the plan is ambiguous or silent — skip areas the client has already covered.
+Once the big rocks are settled, walk through the relevant edge-case gaps from the `audit` report. Only ask where audit found the plan ambiguous, silent, or contradictory — skip areas the client or source material already covered.
 
-- **Unexpected input** — blank fields, extremely long text, weird characters, zero or negative numbers, the wrong kind of value.
-- **Things happening at the same time** — user clicks Submit twice, two people edit the same record, a payment fails halfway through.
-- **Outside services failing** — payment provider down, email not sending, a partner's system slow or returning bad data.
-- **Who's signed in** — not logged in at all, wrong role, session timed out, not the owner of that record.
-- **Amount of data** — brand-new customer with nothing yet, power user with thousands of records, deleted or archived items.
-- **Time and place** — different time zones, cutoff deadlines, public holidays, expired coupons, daylight saving.
+Translate audit's labels into real scenarios before asking. For example, don't say "State / idempotency"; ask "What should happen if someone clicks Submit twice because the page feels slow?"
 
 For each scenario you surface, ask and classify the client's answer:
+
 - **Resolved** — clear decision recorded.
 - **Deferred** — client says "rare enough, a polite error message is fine for now."
 - **Open** — client isn't sure; flag it and come back.
@@ -65,14 +72,15 @@ For each scenario you surface, ask and classify the client's answer:
 
 ### Pass 3 — Business rules and branching logic
 
-If the plan has any rule with 2+ conditions producing different outcomes (e.g. "VIP customers get free shipping, except on Saturdays in Hanoi"), build a decision table (same format and 4-condition size cap as the `audit` skill). Walk each row with the client in plain language, one row at a time.
+Use `audit` as the canonical source for business-rule decision tables. If audit produced tables, walk the unspecified rows, contradictions, and suspiciously collapsed rows with the client in plain language, one row at a time.
 
 Watch for:
+
 - **Rows the client can't decide** → flag as open question.
 - **Contradictions** with something said earlier → raise the conflict, get one answer.
-- **Missing combinations** → ask explicitly about them.
+- **Unspecified or collapsed combinations** → ask explicitly about them.
 
-Multiple independent rule sets → separate tables.
+Multiple independent rule sets remain separate, matching the audit report.
 
 ### Pass 4 — Domain gap check
 
@@ -92,25 +100,32 @@ Keep the four passes visible. When transitioning, say so: "Okay, the big decisio
 
 ### --yolo mode
 
-If invoked with `--yolo`, skip back-and-forth. Walk the full decision tree autonomously — identify every question across all four passes, apply your recommended answer for each (in plain language, from a BA's perspective), then output a single structured summary:
+If invoked with `--yolo`, skip back-and-forth. Run or reuse `audit --yolo` first, then walk the decision tree autonomously — identify the biggest decisions and every audit finding that can be resolved without domain-only knowledge, apply your recommended answer for each (in plain language, from a BA's perspective), and output a single structured summary:
 
 ## Biggest Decisions
+
 - **[Decision]**: [Chosen answer] — [one-line rationale] — [what goes wrong if this is wrong]
 - ...
 
 ## What-If Scenarios Considered
-Group by category (Input / Concurrent actions / Outside services / Sign-in / Data volume / Time & place). For each case:
+
+Group by audit dimension, rewritten in client-friendly language. For each case:
+
 - **[Category] — [Scenario]**: [Handling — resolved / deferred]
 - ...
 
 ## Business Rules
-For each rule with 2+ conditions, embed the decision table inline (same Markdown format as Pass 3).
+
+Embed the audit decision tables after adding the resolved client decisions. Keep audit's table shape; do not invent a second format.
 
 ## Open Questions
+
 Cases where a confident recommendation isn't possible without more context. For each:
+
 - **[Question]**: [Why it matters in business terms] — [What's blocked until resolved]
 
 ## Resolved Plan
+
 Coherent summary of the plan with all decisions baked in, written in the client's language, as if the plan is now definitive.
 
 ## Checklist export
@@ -123,15 +138,21 @@ After producing the Resolved Plan (normal mode) or the full structured summary (
 Only include things a running HTTP API can demonstrate. Skip architectural decisions, "how it's built" items, and anything that can't be observed from the outside.
 
 **Examples:**
+
 - `When a cashier submits a refund over $500, the API returns 422 with message "Manager approval required"`
 - `When two users edit the same order and the second saves, the response returns 409 conflict`
 - `When login fails with wrong password, the API returns 401 with a non-empty error field`
 
-**Write to:** `<project-root>/.checklist/interview-<YYYYMMDD-HHMMSS>.md`
+**Slug derivation:** kebab-case the plan/topic from the input (e.g. "Loyalty Program" → `loyalty-program`). If the input is a file path, use the file's basename without extension, kebab-cased. If still unclear, ask the user once for a slug before writing.
 
-If not in a git repo, write to `./.checklist/interview-<YYYYMMDD-HHMMSS>.md`.
+**Write to:** `<project-root>/.checklist/interview-<slug>/INTERVIEW.md`
+
+If not in a git repo, write to `./.checklist/interview-<slug>/INTERVIEW.md`.
+
+If the file already exists for this `<slug>`, ask the user once: overwrite, or pick a new slug.
 
 **File format:**
+
 ```markdown
 # Acceptance Checklist
 <!-- Generated by /interview-me on <YYYY-MM-DD HH:MM:SS> -->
@@ -141,6 +162,7 @@ If not in a git repo, write to `./.checklist/interview-<YYYYMMDD-HHMMSS>.md`.
 ```
 
 After writing, ensure `.checklist/` is gitignored:
+
 ```bash
 # Ensure .checklist/ is gitignored (no-op outside a git repo)
 if ROOT="$(git rev-parse --show-toplevel 2>/dev/null)"; then
@@ -149,4 +171,4 @@ fi
 ```
 
 Then print one line:
-`Checklist → .checklist/interview-<timestamp>.md  (use: /verify --checklist .checklist/interview-<timestamp>.md)`
+`Checklist → .checklist/interview-<slug>/INTERVIEW.md  (use: /verify --checklist .checklist/interview-<slug>/INTERVIEW.md)`

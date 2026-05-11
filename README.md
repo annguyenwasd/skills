@@ -12,18 +12,17 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 
 ## Skills
 
-| Skill | Purpose |
-| --- | --- |
-| `audit` | Stress-test a plan, PRD, or mockup for missing edge cases and ambiguous rules. |
-| `design` | Generate an HTML mockup for a screen before implementing it. |
-| `grill-me` | Interrogate a technical plan branch-by-branch until every decision is resolved. |
-| `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability. |
-| `interview-me` | Business-analyst interview to pressure-test a non-technical client's plan. |
-| `prd-to-issues` | Slice a PRD into vertical, independently-shippable GitHub issues. |
-| `ship-it` | End-to-end PRD orchestrator — issue DAG, parallel agents, TDD per slice. |
-| `tdd` | Red-green-refactor TDD loop for features and bugfixes. |
-| `verify` | Verify a running app's behaviour against a checklist. Spawns a fresh-context subagent (no code knowledge) and reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. |
-| `write-a-prd` | Produce a PRD via interview, codebase exploration, and module design; submit as a GitHub issue. |
+
+| Skill                           | Purpose                                                                                                                                                                |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `audit`                         | Stress-test a plan, PRD, or mockup for missing edge cases and ambiguous rules.                                                                                         |
+| `design`                        | Generate an HTML mockup for a screen before implementing it.                                                                                                           |
+| `fix`                           | Single-shot bug fixer on the current branch with strict TDD and per-attempt checklists.                                                                                |
+| `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability.                                                                                  |
+| `interview-me`                  | Business-analyst interview to pressure-test a non-technical client's plan.                                                                                             |
+| `tdd`                           | Red-green-refactor TDD loop for features and bugfixes.                                                                                                                 |
+| `verify`                        | Verify a running app's behaviour against a checklist. Spawns a fresh-context subagent (no code knowledge) and reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. |
+
 
 ## Prerequisites
 
@@ -90,65 +89,43 @@ cd ~/workspace/skills
 
 ## Usage
 
-After linking, each skill is invocable in Claude Code as `/<skill-name>` (e.g. `/audit`, `/ship-it`). Full descriptions and trigger conditions live in each skill's `SKILL.md` frontmatter.
+After linking, each skill is invocable in Claude Code as `/<skill-name>` (e.g. `/audit`, `/verify`). Full descriptions and trigger conditions live in each skill's `SKILL.md` frontmatter.
 
 ## Workflows
 
-### Full pipeline
+Some planning skills write a checklist file. `/verify` reads it.
+
+### 1. Non-technical pitch → checklist → verify
 
 ```
-                  non-technical idea
-                         │
-                  /interview-me ──┐  writes .checklist/interview-*.md
-                                  │
-                  technical idea  │
-                         │        ▼
-                   /grill-me ─► /write-a-prd ─► /ship-it --verify
-                   (writes         (writes PRD     (ships + verifies
-                   .checklist/     issue #N +       + posts evidence
-                   grill-*.md)     .checklist/      to PRD issue)
-                                   prd-N.md)
-                                  ▲
-                  PRD already exists
-                         │        │
-                         └────────┘
+/interview-me  →  /verify --checklist .checklist/interview-<slug>/INTERVIEW.md
 ```
 
-Every planning skill writes a `.checklist/` file (git-ignored). `/verify` reads it. `/ship-it --verify` runs it automatically after merging.
+`/interview-me` runs a four-pass business-analyst interview and writes `.checklist/interview-<slug>/INTERVIEW.md`. `/verify` runs that checklist against the running app and reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item.
 
----
-
-### 1. Non-technical pitch → ship + verify
+### 2. Audit an existing spec
 
 ```
-/interview-me  →  /write-a-prd  →  /ship-it --prd <N> --verify
+/audit
 ```
 
-`/interview-me` runs a four-pass business-analyst interview and writes `.checklist/interview-<timestamp>.md`. `/write-a-prd` produces a structured PRD issue with an `## Acceptance Checklist` section and writes `.checklist/prd-<N>.md`. `/ship-it --verify` ships all slices then verifies the running app against the checklist, posting per-item evidence comments on the PRD issue.
+`/audit` stress-tests a plan or mockup and reports missing edge cases, ambiguous rules, contradictions, and unspecified UI states. It does not write a checklist; use `/interview-me` to resolve findings into a verifiable checklist.
 
-### 2. Technical plan → ship + verify
-
-```
-/grill-me  →  /write-a-prd  →  /ship-it --prd <N> --verify
-```
-
-`/grill-me` interrogates every branch of the decision tree and writes `.checklist/grill-<timestamp>.md`. Same downstream as above.
-
-### 3. PRD already drafted → ship + verify
+### 3. Single bug fix → verify
 
 ```
-/write-a-prd  →  /ship-it --prd <N> --verify
+/fix  (handles its own /verify loop internally)
 ```
 
-Or jump straight to `/ship-it --prd <file-or-issue> --verify` if the PRD exists.
+`/fix` writes `.checklist/fix-<slug>-#<try>.md` per attempt and runs `/verify --checklist` against it in the foreground. One re-fix allowed; optional GitHub issue + commit linkage at the end.
 
-### 4. Verify + auto-fix after shipping
+### 4. Verify + auto-fix on a checklist
 
 ```
-/verify --prd <N> --fix
+/verify --checklist <path> --fix
 ```
 
-Re-runs verification against the live app. For each FAIL or TIMEOUT item, spawns a sequential TDD fix agent (RED → GREEN → PR). Three outcomes per item: `FIX_COMPLETE` (PR opened), `FIX_FAILED` (needs manual), `FIX_NOT_NEEDED` (checklist item was wrong).
+For each FAIL or TIMEOUT item, spawns a sequential TDD fix agent (RED → GREEN → PR). Three outcomes per item: `FIX_COMPLETE` (PR opened), `FIX_FAILED` (needs manual), `FIX_NOT_NEEDED` (checklist item was wrong).
 
 ### `/verify` reference
 
@@ -167,24 +144,22 @@ Verification subagent has **zero code access** — only curl + the checklist. Pr
 
 ### Optional checkpoints
 
-- `/audit` — stress-test a PRD or plan for missing edge cases before slicing.
-- `/design` — generate an HTML mockup for a screen before `/ship-it` implements it.
-- `/improve-codebase-architecture` — run before large feature work to surface refactors that make the slices testable.
-- `/fix` — single-shot bug fixer for one issue at a time on the current branch; writes a per-attempt `.checklist/fix-<slug>-#<try>.md` and runs `/verify` against it.
+- `/audit` — stress-test a plan or mockup for missing edge cases before implementation.
+- `/design` — generate an HTML mockup for a screen before implementing it.
+- `/improve-codebase-architecture` — run before large feature work to surface refactors that make the next slices testable.
 
 ### `.checklist/` convention
 
-Planning skills write checklist files to `<project-root>/.checklist/`:
+Checklist-producing skills write files to `<project-root>/.checklist/`:
 
-| Source | File |
-|---|---|
-| `/interview-me` | `.checklist/interview-<YYYYMMDD-HHMMSS>.md` |
-| `/grill-me` | `.checklist/grill-<YYYYMMDD-HHMMSS>.md` |
-| `/audit` | `.checklist/audit-<YYYYMMDD-HHMMSS>.md` (from input spec, not gaps) |
-| `/write-a-prd` | `.checklist/prd-<issue-number>.md` |
-| `/fix` | `.checklist/fix-<slug>-#<try>.md` (one per attempt — `#1` initial, `#2` re-fix) |
 
-These files are git-ignored (added automatically by `/write-a-prd`; add `.checklist/` to your global gitignore for other workflows).
+| Source          | File                                                                            |
+| --------------- | ------------------------------------------------------------------------------- |
+| `/interview-me` | `.checklist/interview-<slug>/INTERVIEW.md`                                      |
+| `/fix`          | `.checklist/fix-<slug>-#<try>.md` (one per attempt — `#1` initial, `#2` re-fix) |
+
+
+These files are git-ignored. Add `.checklist/` to your global gitignore (or the repo's `.gitignore`).
 
 ## Resources
 
@@ -204,3 +179,4 @@ Claude-related plugins and references I rely on. Append new finds here.
 ### Reading
 
 - [karpathy — LLM Wiki](https://gist.github.com/karpathy/442a6bf555914893e9891c11519de94f) — design pattern for an LLM-maintained personal knowledge base: raw sources → interlinked markdown wiki → schema doc, so knowledge compounds across sessions instead of being re-derived from raw docs each query.
+

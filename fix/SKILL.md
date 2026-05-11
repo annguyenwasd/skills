@@ -1,9 +1,10 @@
 ---
-name: fix
+
+## name: fix
+
 description: Single-shot bug fixer. Fixes one bug inline on the current branch using strict TDD — no queue, no separate branch, no subagent. Writes a per-attempt checklist (`.checklist/fix-<slug>-#<try>.md`), runs /verify against it in the foreground, allows one re-fix on verify failure, prompts the user to confirm, then optionally (AskUserQuestion) creates a GitHub issue, posts the fix commit and links as comments, adds `fix-issue:` next to the `fix:<slug>-#N` marker, commits, and closes the issue. Use when the user wants a single bug fixed end-to-end on the current branch in the current session, mentions "fix this", or invokes /fix.
 model: opus
-argument-hint: "(--no-verify) (--no-issue) (<bug description>)"
----
+argument-hint: "(--no-verify) (--no-issue) ()"
 
 # /fix — Single-Shot Bug Fixer
 
@@ -220,7 +221,7 @@ Print: `Checklist written: .checklist/fix-${title}-#${ATTEMPT}.md`
 
 If `AUTO_VERIFY == false`: set `VERIFY_STATUS=not-run`, skip the rest of Step 4, jump to Step 5 (confirm prompt).
 
-### Run /verify --checklist <path> (foreground subagent)
+### Run /verify --checklist  (foreground subagent)
 
 The harness rejects nested skill invocations from inside a skill. Spawn a foreground `general-purpose` Agent that runs `/verify --checklist .checklist/fix-${title}-#${ATTEMPT}.md` non-interactively. Block on completion. Store stdout as `VERIFY_REPORT`.
 
@@ -395,7 +396,7 @@ options:
 
 ### 7b — Preflight GitHub CLI
 
-Mirror `write-a-prd` style checks before any mutation:
+Standard preflight checks before any mutation:
 
 Probe `gh`: binary exists and `gh auth status` succeeds. If either fails, print one line (`Skip GitHub: …`), stop Step 7.
 

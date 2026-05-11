@@ -1,6 +1,6 @@
 ---
 name: design
-description: Generate an HTML mockup for a screen/page before implementing it. Invoked explicitly as /design [--path <dir>] <feature-name>. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to <base-dir>/<slug>/ (default ~/.design/, override with --path), serves them with live-server, opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser), captures a screenshot via playwright-cli, and asks for approval via AskUserQuestion before proceeding to code.
+description: Generate an HTML mockup for a screen/page before implementing it. Invoked explicitly as /design [--path <dir>] <feature-name>. Spawns one readonly Explore subagent to discover the frontend package, all DESIGN.md files repo-wide, and representative pages; parent reads those artifacts before generating HTML. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to <base-dir>/<slug>/ (default ~/.design/, override with --path), serves them with live-server, opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser), captures a screenshot via playwright-cli, and asks for approval via AskUserQuestion before proceeding to code.
 argument-hint: "[--path <dir>] <feature-name or description>"
 ---
 
@@ -31,14 +31,37 @@ fi
 mkdir -p "$BASE_DIR"
 ```
 
-Throughout the rest of this skill, every reference to `~/.design/<slug>/` means `$BASE_DIR/<slug>/`. Direct user invocations without `--path` keep the legacy `~/.design/` location for backward compatibility; callers like `/write-a-prd` will pass `--path "$(git rev-parse --show-toplevel)/.design"` to keep mockups inside the repo.
+Throughout the rest of this skill, every reference to `~/.design/<slug>/` means `$BASE_DIR/<slug>/`. Direct user invocations without `--path` keep the legacy `~/.design/` location for backward compatibility; callers may pass `--path "$(git rev-parse --show-toplevel)/.design"` to keep mockups inside the repo.
 
-## Step 1 — Detect UI library
+## Step 1 — Explore codebase (Explore subagent)
 
-Locate `package.json`:
-- Single-package repo: read `./package.json`.
-- Monorepo (workspace at root + `packages/*` or `apps/*`): prefer the frontend package's own `package.json`. If multiple frontend packages exist, ask the user which one to design for.
-- No `package.json` found (e.g. backend-only repo, non-JS project): skip library detection and use plain HTML + CSS with a clean modern style. Note this to the user.
+**Skip if upstream already explored.** If the caller (e.g. `interview-me`) already passed the structured codebase context this step produces — repo root, primary frontend `package.json` path, every `DESIGN.md` path, and 1–2 representative UI files — reuse it and jump to Step 2. Run a **single additional** bounded explore pass only if a specific needed artifact is missing (e.g. a layout file the caller didn't surface); do not chain open-ended explore loops.
+
+Otherwise, before reading files yourself, invoke **one** readonly exploration pass (same bounded pattern as the **`improve-codebase-architecture`** skill).
+
+- Use the **Agent** or **Task** tool with **`subagent_type`: `explore`** (Cursor) or **`subagent_type=Explore`** (Claude Code) — same intent, different product casing.
+- **Readonly:** the subagent must not edit files.
+- **Default cap:** **one** subagent call. Use a **second** call only if the user must disambiguate multiple frontends after you ask them which app/package to design for — do not chain open-ended explore loops.
+
+Pass the subagent a brief that includes the **feature name / description** from Step 0 (so it knows what UI context matters). Require a **structured reply** the parent will use in Step 2:
+
+1. **Repo root** (or workspace root) path.
+2. **Primary frontend `package.json` path** — which file to use for dependency/CDN detection; if monorepo, state which app/package was chosen and why (or flag ambiguity).
+3. **All design-spec file paths** — every file named **`DESIGN.md` case-insensitively** (e.g. `DESIGN.md`, `design.md`) anywhere under the repo, **excluding** `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `out/`, and other generated/vendor trees the subagent can reasonably skip.
+4. **1–2 representative UI file paths** for app chrome — prefer a list/table route if present; paths to components/layout that show sidebar, header, main padding, container width, typography if no full page exists.
+5. **Short bullets:** routing style (e.g. Next `app/`, `pages/`, SPA), where the shell/layout lives if obvious.
+
+If the repo is huge or ambiguous, the subagent should return **best-effort paths** and mark **uncertain** areas; you may ask the user **one** disambiguation question instead of spawning more explorers.
+
+The subagent may **recommend** which `DESIGN.md` is most relevant to the feature; you still read **every** listed design-spec file in Step 2 unless the user explicitly narrows scope.
+
+## Step 2 — Read synthesis (parent agent)
+
+You (the parent agent), not the subagent:
+
+### 2a — `package.json` and UI library
+
+Read the **primary frontend `package.json`** from Step 1. If none was found (backend-only, non-JS): skip library detection, use plain HTML + CSS with a clean modern style, and note this to the user. If multiple frontends were flagged ambiguous: ask the user which `package.json` to use before continuing.
 
 Look for these libraries in `dependencies` or `devDependencies`:
 
@@ -53,17 +76,22 @@ Look for these libraries in `dependencies` or `devDependencies`:
 
 If no recognized library is found, use plain HTML + CSS with a clean modern style.
 
-Also check if `DESIGN.md` exists in the repo root — if it does, read it and extract color tokens, typography, spacing, and component rules to apply in the mockup.
+### 2b — All `DESIGN.md` files
 
-## Step 2 — Read one existing page for layout patterns
+Read **every** design-spec path returned in Step 1. Extract color tokens, typography, spacing, and component rules; **apply all** in the mockup.
 
-Glob the project's page directory — common patterns: `frontend/src/pages/*.{tsx,jsx,vue,svelte}`, `src/pages/*`, `pages/*`, `app/*` (Next.js app router), `src/routes/*` (SvelteKit/SolidStart). Adapt to repo structure. If no pages directory exists (component library, brand-new repo), skip this step and use a generic clean layout.
+**Conflict rule:** if the same token or rule is defined differently in multiple files, prefer the file whose directory is **closest to the primary frontend package root** (longest shared path prefix / nearest ancestor). If still tied, prefer the **shallower** path (fewer segments from repo root). If still tied, **alphabetical** full path. Print **one user-visible line** per conflict: which keys conflicted and which file won.
 
-Pick a representative page (prefer a list/table page). Read it to understand:
+### 2c — Representative pages for layout
+
+Read the **1–2 representative UI files** from Step 1. From them, infer:
+
 - Sidebar width and colors
 - Topbar/header structure
 - Page padding and container width
 - Typography scale
+
+If Step 1 found no suitable files (component library, brand-new repo), skip this subsection and use a generic clean layout in Step 4.
 
 ## Step 3 — Determine slug and version
 
@@ -130,69 +158,19 @@ Options:
 
 **If "Start over"** → ask the user to describe what they want differently, then return to Step 1.
 
-## Step 6.5 — Capture screenshot with playwright-cli
-
-Runs only after the user picks "Looks good — proceed to code". Reuse the live-server URL already running from Step 5.
-
-1. **Ensure Chromium is installed for playwright** (idempotent — only downloads on first use):
-
-   ```bash
-   npx -y playwright install --with-deps chromium 2>/dev/null || npx -y playwright install chromium
-   ```
-
-2. **Capture the screenshot** with `npx playwright screenshot`. Pick the viewport(s) based on what the user (or the calling skill) requested for this mockup; default is desktop only.
-
-   Desktop (default):
-
-   ```bash
-   npx -y playwright screenshot \
-     --viewport-size=1440,900 \
-     --full-page \
-     --wait-for-timeout=500 \
-     "http://127.0.0.1:${PORT}/vN.html" \
-     "$BASE_DIR/<slug>/vN.png"
-   ```
-
-   Mobile (if the mockup is mobile-first or the caller requested mobile):
-
-   ```bash
-   npx -y playwright screenshot \
-     --viewport-size=390,844 \
-     --device="iPhone 14" \
-     --full-page \
-     --wait-for-timeout=500 \
-     "http://127.0.0.1:${PORT}/vN.html" \
-     "$BASE_DIR/<slug>/vN-mobile.png"
-   ```
-
-   When the caller requested **both** viewports, write both files (`$BASE_DIR/<slug>/vN-desktop.png` and `$BASE_DIR/<slug>/vN-mobile.png`) and report both paths back in the final output. In that case the desktop path takes precedence in the `png=` field.
-
-3. **On screenshot failure** (playwright install fails, the live-server URL is unreachable, the chromium download is blocked by network policy, etc.) print a one-line warning like `warn: screenshot capture failed (<reason>); continuing without PNG` and continue. Set `PNG_PATH=NONE` for the final output line. Downstream callers (`/write-a-prd`) tolerate a missing screenshot.
-
-## Step 6.6 — Final output contract
+## Step 6.5 — Final output contract
 
 Print exactly one line on stdout (last line of skill output) that callers parse:
 
 ```
-DESIGN_APPROVED slug=<slug> html=<absolute-html-path> png=<absolute-png-path-or-NONE>
+DESIGN_APPROVED slug=<slug> html=<absolute-html-path>
 ```
 
 Examples:
 
 ```
-DESIGN_APPROVED slug=dashboard html=/Users/me/repo/.design/dashboard/v2.html png=/Users/me/repo/.design/dashboard/v2.png
-DESIGN_APPROVED slug=order-detail html=/Users/me/repo/.design/order-detail/v1.html png=NONE
+DESIGN_APPROVED slug=dashboard html=/Users/me/repo/.design/dashboard/v2.html
+DESIGN_APPROVED slug=order-detail html=/Users/me/repo/.design/order-detail/v1.html
 ```
 
 Use absolute paths in both fields. The `slug` field must exactly match the slug computed in Step 3.
-
-## Step 7 — Implement
-
-Only after the user approves the mockup and the screenshot has been captured (or skipped):
-
-- Implement the actual React/TypeScript (or whatever the repo uses) code
-- Reference the approved mockup's structure, component choices, and layout
-- Follow all repo conventions (i18n, TypeScript types, existing patterns)
-- Do NOT re-create the mockup file — it stays as a reference artifact
-
-When `/design` is invoked by another skill (e.g. `/write-a-prd`) the caller will skip Step 7 — it only consumes the `DESIGN_APPROVED` line. In that case, after printing the line, exit without writing implementation code.

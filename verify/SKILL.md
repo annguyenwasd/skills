@@ -1,9 +1,10 @@
 ---
-name: verify
+
+## name: verify
+
 description: Verify that a running app's behaviour matches a checklist of expected outcomes. Auto-starts the app if it isn't running, spawns a fresh-context subagent (curl-only, no code access) to verify each item, then shuts the app down. Reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. Invoke as /verify.
 model: opus
-argument-hint: "[--checklist <path>] [--prd <number>] [--base-url <url>] [--timeout <seconds>] [--ready-timeout <seconds>] [--start-cmd <command>] [--fix] [--no-browser]"
----
+argument-hint: "[--checklist ] [--prd ] [--base-url ] [--timeout ] [--ready-timeout ] [--start-cmd ] [--fix] [--no-browser]"
 
 # /verify — Behavioural Verification
 
@@ -43,7 +44,7 @@ CHECKLIST_DIR="$(git rev-parse --show-toplevel 2>/dev/null)/.checklist"
 
 - If `--prd <N>`: use `$CHECKLIST_DIR/prd-<N>.md`. Abort if not found.
 - If no flag: list `.md` files in `$CHECKLIST_DIR`, sorted by modification time descending.
-  - Zero files → abort: `"No checklist found. Run /interview-me, /grill-me, or /write-a-prd first, or pass --checklist <path>."`
+  - Zero files → abort: `"No checklist found. Run /interview-me first, or pass --checklist <path>."`
   - Exactly one file → use it. Print: `Using checklist: <path>`
   - Multiple files → print the list and abort: `"Multiple checklists found. Specify one with --checklist <path> or --prd <number>:"`
 
@@ -82,28 +83,22 @@ Otherwise detect from the project root (use `git rev-parse --show-toplevel` to f
 
 **Detection order — stop at the first match:**
 
-1. **`package.json` scripts** — look for scripts named `dev`, `start`, `serve`, `preview` in that priority order.
-   - Detect package manager: `pnpm-lock.yaml` → `pnpm run`; `yarn.lock` → `yarn`; `bun.lockb` → `bun run`; else → `npm run`
-   - Command: `<pm> run <script>`
-
-2. **`Procfile`** — if a `web:` entry exists, use the value after `web:`.
-
-3. **`Cargo.toml`** → `cargo run`
-
-4. **`pyproject.toml` or `setup.py` / `requirements.txt`**:
-   - `uvicorn` in deps → `uvicorn main:app --reload` (or `app:app` if `app.py` exists at root)
-   - `django` in deps → `python manage.py runserver`
-   - `flask` in deps → `flask run`
-
-5. **`manage.py`** at project root → `python manage.py runserver`
-
-6. **`Makefile`** with a `run`, `serve`, or `start` target → `make <target>`
-
+1. `**package.json` scripts** — look for scripts named `dev`, `start`, `serve`, `preview` in that priority order.
+  - Detect package manager: `pnpm-lock.yaml` → `pnpm run`; `yarn.lock` → `yarn`; `bun.lockb` → `bun run`; else → `npm run`
+  - Command: `<pm> run <script>`
+2. `**Procfile`** — if a `web:` entry exists, use the value after `web:`.
+3. `**Cargo.toml`** → `cargo run`
+4. `**pyproject.toml` or `setup.py` / `requirements.txt**`:
+  - `uvicorn` in deps → `uvicorn main:app --reload` (or `app:app` if `app.py` exists at root)
+  - `django` in deps → `python manage.py runserver`
+  - `flask` in deps → `flask run`
+5. `**manage.py**` at project root → `python manage.py runserver`
+6. `**Makefile**` with a `run`, `serve`, or `start` target → `make <target>`
 7. **Nothing found:** abort with:
-   ```
+  ```
    Cannot detect start command. Start the app manually or re-run with:
      /verify --checklist <path> --start-cmd "<your start command>"
-   ```
+  ```
 
 ### 3b. Start the app
 
@@ -136,6 +131,7 @@ done
 ```
 
 If still unreachable after `<ready-timeout>`s: kill the process (`kill $APP_PID 2>/dev/null`), then abort:
+
 ```
 App failed to start within <ready-timeout>s. Check the start command output above for errors.
 ```
@@ -281,6 +277,7 @@ OUTPUT — your final output must be EXACTLY this format
 ## Step 5b — Browser verification pass (playwright-cli)
 
 Skip entirely if:
+
 - `--no-browser` was passed
 - Zero `UNVERIFIABLE` items in the Step 5 report
 
@@ -300,7 +297,7 @@ rm -f "$SCREENSHOT_DIR"/item-*.png
 
 The `rm -f` clears stale `item-*.png` files from prior runs of the same checklist — otherwise screenshots from previously-UNVERIFIABLE-but-now-curl-PASS items would linger and mislead the reviewer. Other files (if any) are left untouched.
 
-**`/fix` checklists:** upstream `/fix` must write `.checklist/fix-<slug>-#<N>.md`; then `--checklist` that path yields `SCREENSHOT_DIR` = `.checklist/fix-<slug>-#<N>-screenshots`. Example: `--checklist .checklist/fix-<slug>-#1.md` → `.checklist/fix-<slug>-#1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by the upstream skill that produced the checklist.
+`**/fix` checklists:** upstream `/fix` must write `.checklist/fix-<slug>-#<N>.md`; then `--checklist` that path yields `SCREENSHOT_DIR` = `.checklist/fix-<slug>-#<N>-screenshots`. Example: `--checklist .checklist/fix-<slug>-#1.md` → `.checklist/fix-<slug>-#1-screenshots`. The folder inherits the existing `.checklist/` gitignore line written by the upstream skill that produced the checklist.
 
 Non-fix example: `--checklist .checklist/prd-123.md` → `SCREENSHOT_DIR` = `.checklist/prd-123-screenshots` (same stem rule).
 
@@ -358,6 +355,7 @@ After the subagent returns → **5b-3. Merge results** (below).
 ### 5b-3. Merge results
 
 After the subagent returns:
+
 - For every item the subagent returned a row for: replace the corresponding UNVERIFIABLE row in the Step 5 report table with the new row.
 - For every UNVERIFIABLE item the subagent did **not** return a row for (crash, malformed output, omission): leave the row as `UNVERIFIABLE` and set its evidence to `browser pass returned no result for this item`.
 - Browser-pass rows are emitted with a `(browser)` suffix on every status (e.g. `PASS (browser)`, `FAIL (browser)`) — preserve the suffix verbatim so Step 7 can detect them.
@@ -371,6 +369,7 @@ After the subagent returns:
 Print the subagent's full output verbatim.
 
 If the subagent errors or produces no output:
+
 ```
 VERIFY_ERROR: subagent did not produce a report.
 ```
@@ -408,12 +407,12 @@ BASE_BRANCH="$(git symbolic-ref refs/remotes/origin/HEAD --short 2>/dev/null | s
 Parse FAIL and TIMEOUT items from the merged report (status cells `FAIL`, `TIMEOUT`, `FAIL (browser)`, or `TIMEOUT (browser)`). For each item **sequentially**:
 
 1. Derive a branch slug: lowercase kebab of first 6 words of item text, prefixed `verify-fix/` and suffixed with `-<N>` where `<N>` is the item number. The number suffix prevents collisions when two items share their first 6 words.
-   (e.g. item #3 → `verify-fix/post-orders-invalid-payload-returns-400-3`)
+  (e.g. item #3 → `verify-fix/post-orders-invalid-payload-returns-400-3`)
 2. Determine `BROWSER_ITEM`: `true` if the item's status cell ends in `(browser)`, else `false`. The fix-agent prompt short-circuits when `BROWSER_ITEM=true` (auto-fix not supported for browser-verified items).
 3. Spawn a foreground `general-purpose` Agent using verify-fix-agent-prompt, passing `BASE_BRANCH` as `<base-branch>`
 4. Wait for completion before starting the next item
 
-Each fix agent has a hard wall-clock cap of **15 minutes**. If the agent does not return its `FIX_*` final line within 900s, the orchestrator records `FIX_FAILED: agent timeout (>15min)` for that item and moves on.
+Each fix agent has a hard wall-clock cap of **15 minutes**. If the agent does not return its `FIX_`* final line within 900s, the orchestrator records `FIX_FAILED: agent timeout (>15min)` for that item and moves on.
 
 After all fix agents complete, print:
 
@@ -646,3 +645,4 @@ where `<#>` is the item number. Omit the tag only when capture errored.
 - Browser-pass rows always carry a `(browser)` suffix on their status — preserve it through merge so Step 7 can detect them
 - Browser pass writes one PNG per re-checked item to `<checklist-dir>/<checklist-stem>-screenshots/item-<#>.png` (e.g. `.checklist/fix-<slug>-#1-screenshots/item-3.png`). `<checklist-stem>-screenshots` is deterministic from the checklist path only (`basename` minus `.md` + `-screenshots`). For `/fix` runs, checklist filename must follow `fix-<slug>-#<N>.md` so screenshots land under `fix-<slug>-#<N>-screenshots`. Folder is created lazily by Step 5b-1 — absent when `--no-browser` skips the pass. Files inherit the existing `.checklist/` gitignore line. A failed screenshot capture must NOT change item status; the evidence cell simply omits the `[screenshot: ...]` tag
 - Do not run two `/verify` invocations against the same project simultaneously — both will try to auto-start the app and race on the port
+
