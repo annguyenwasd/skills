@@ -22,7 +22,22 @@ After this pass, per-question exploration is on-demand: cap at ~5 tool calls —
 
 **Gap discovery → delegate.** Before asking "what if" or business-rule questions, run or reuse the `audit` skill on the same input. For a topic with no spec, use audit's speculative mode. Treat the audit report as the backlog of gaps to resolve; preserve audit's severity ordering, but rewrite every item in plain business language before asking the client.
 
-**Design changes -> delegate.** If the conversation surfaces UI/screen/visual-design decisions (new screen, layout change, component design), pause the interview and hand off to the `design` skill. Derive the same `<slug>` you will use for the interview checklist, create the intended checklist directory `.checklist/interview-<slug>/`, and invoke `/design --path .checklist/interview-<slug> <feature>` so mockups land beside the later `INTERVIEW.md`. Resume the interview only after `/design` returns `DESIGN_APPROVED` (or the user opts out). When you hand off, pass the codebase context you already gathered so `/design` can skip its own explore step.
+**Design changes -> delegate.** If the conversation surfaces UI/screen/visual-design decisions (new screen, layout change, component design), pause the interview and hand off to the `design` skill.
+
+- Derive the interview `<slug>` once (see "Slug derivation" below) and reuse it for design.
+- Create the checklist directory up front: `mkdir -p .checklist/interview-<slug>/`.
+- Invoke design with the slug pinned and the codebase context inlined so it does not re-explore:
+
+  `/design --path .checklist/interview-<slug> --slug <slug> <feature>`
+
+  Include in the invocation prompt: frontend `package.json` path, every `DESIGN.md` path, and the current screen/component paths you already gathered. Tell design to skip its own explore step.
+
+- In `--yolo` mode, also pass `--yolo` to design. Design will generate and open v1 without asking for approval; the user reviews it later.
+- Resume the interview only after design emits one of:
+  - `DESIGN_APPROVED slug=<slug> html=<path>` — record the mockup path in the resolved plan.
+  - `DESIGN_GENERATED slug=<slug> html=<path>` — yolo draft; record the path and flag the UI decision as **Pending user review** in the resolved plan / Open Questions.
+  - `DESIGN_SKIPPED slug=<slug>` — user opted out; continue without a mockup.
+  - `DESIGN_ABORTED slug=<slug> reason=<...>` — design loop exhausted; flag the UI decision as **Open** and continue.
 
 ## Argument parsing
 

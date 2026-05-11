@@ -1,181 +1,153 @@
 ---
 name: design
-description: Generate an HTML mockup for a screen/page and ask for approval. Invoked explicitly as /design [--path <dir>] <feature-name>. Spawns one readonly Explore subagent to discover the frontend package, all DESIGN.md files repo-wide, and representative pages; parent reads those artifacts before generating HTML. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to <base-dir>/<slug>/ (default .design in the current working directory; interview-me callers use --path to write beside INTERVIEW.md; override with --path), serves them with live-server, opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser), captures a screenshot via playwright-cli, and asks for approval via AskUserQuestion.
-argument-hint: "[--path <dir>] <feature-name or description>"
+description: Generate an HTML design mockup for a requested UI change, matching the current app's UI library, design principles, and nearby screens. Use when the user explicitly invokes /design, or when another skill such as interview-me needs a mockup for a screen, layout, component, or visual change.
+argument-hint: "[--path <dir>] [--slug <slug>] [--yolo] <feature-name or UI change>"
 ---
 
-Generate an HTML mockup for the requested screen, get user approval. Follow these steps exactly.
+# Design
 
-## Step 0 — Parse arguments
+Create a focused HTML mockup, iterate with the user, stop only when approved or explicitly skipped.
 
-Parse the invocation arguments before doing anything else:
+## Inputs
 
-- Optional flag: `--path <dir>` — overrides where mockups are written. Accepts an absolute path or a path starting with `~` (which must be expanded to `$HOME`).
-- All remaining positional arguments form the feature name / description.
+Parse arguments first:
 
-Resolve the base directory:
+- `--path <dir>`: optional output directory from an upstream caller (e.g. `interview-me`).
+- `--slug <slug>`: optional slug; if provided, use it verbatim and skip kebab-casing.
+- `--yolo`: optional; auto-approve the first version and skip the approval loop.
+- remaining words: feature name or UI change description.
 
-```bash
-# Default for direct /design calls
-BASE_DIR="$PWD/.design"
+If no feature name is provided, ask once what screen or UI change to design, then stop.
 
-# If an upstream caller passed an interview checklist path, write beside INTERVIEW.md
-if [ -n "$INTERVIEW_CHECKLIST_PATH" ]; then
-  BASE_DIR="$(cd "$(dirname "$INTERVIEW_CHECKLIST_PATH")" && pwd)"
-fi
+## Output Location
 
-# If --path was passed, replace BASE_DIR with the resolved value
-if [ -n "$PATH_FLAG" ]; then
-  case "$PATH_FLAG" in
-    "~"|"~/"*) BASE_DIR="${HOME}${PATH_FLAG#\~}" ;;
-    /*)        BASE_DIR="$PATH_FLAG" ;;
-    *)         BASE_DIR="$(cd "$(dirname "$PATH_FLAG")" 2>/dev/null && pwd)/$(basename "$PATH_FLAG")" ;;
-  esac
-fi
+Two schemes — both intentional:
 
-mkdir -p "$BASE_DIR"
-```
+- Explicit `/design <feature>` call: write to `./design/<slug>/vN.html` (versioned folder).
+- Called with `--path <dir>` (e.g. by `interview-me`): write to `<dir>/design-<slug>-vN.html` (flat, alongside `INTERVIEW.md` which the caller will write later).
 
-Throughout the rest of this skill, every reference to a mockup directory means `$BASE_DIR/<slug>/`. Direct `/design` invocations without `--path` write to `<current-working-directory>/.design/<slug>/`; `interview-me` callers should pass `--path .checklist/interview-<slug>` so mockups write beside `INTERVIEW.md`; `--path` overrides both.
+Slug rules:
 
-## Step 1 — Explore codebase (Explore subagent)
+- If `--slug` is passed, use it verbatim.
+- Otherwise kebab-case the feature name (e.g. "Payment History" → `payment-history`).
 
-**Skip if upstream already explored.** If the caller (e.g. `interview-me`) already passed the structured codebase context this step produces — repo root, primary frontend `package.json` path, every `DESIGN.md` path, and 1–2 representative UI files — reuse it and jump to Step 2. Run a **single additional** bounded explore pass only if a specific needed artifact is missing (e.g. a layout file the caller didn't surface); do not chain open-ended explore loops.
+Each iteration increments `vN`; never overwrite a previous version. If a version with the same N already exists on disk (stale files from earlier runs), pick the next free N.
 
-Otherwise, before reading files yourself, invoke **one** readonly exploration pass (same bounded pattern as the **`improve-codebase-architecture`** skill).
+## Explore First
 
-- Use the **Agent** or **Task** tool with **`subagent_type`: `explore`** (Cursor) or **`subagent_type=Explore`** (Claude Code) — same intent, different product casing.
-- **Readonly:** the subagent must not edit files.
-- **Default cap:** **one** subagent call. Use a **second** call only if the user must disambiguate multiple frontends after you ask them which app/package to design for — do not chain open-ended explore loops.
+**Skip exploration entirely if the caller already supplied structured codebase context** — frontend `package.json` path, every relevant `DESIGN.md` path, and the current screen/component paths that will change. In that case, jump to "Respect Existing UI".
 
-Pass the subagent a brief that includes the **feature name / description** from Step 0 (so it knows what UI context matters). Require a **structured reply** the parent will use in Step 2:
+Otherwise run one bounded discovery pass.
 
-1. **Repo root** (or workspace root) path.
-2. **Primary frontend `package.json` path** — which file to use for dependency/CDN detection; if monorepo, state which app/package was chosen and why (or flag ambiguity).
-3. **All design-spec file paths** — every file named **`DESIGN.md` case-insensitively** (e.g. `DESIGN.md`, `design.md`) anywhere under the repo, **excluding** `node_modules/`, `.git/`, `dist/`, `build/`, `.next/`, `out/`, and other generated/vendor trees the subagent can reasonably skip.
-4. **1–2 representative UI file paths** for app chrome — prefer a list/table route if present; paths to components/layout that show sidebar, header, main padding, container width, typography if no full page exists.
-5. **Short bullets:** routing style (e.g. Next `app/`, `pages/`, SPA), where the shell/layout lives if obvious.
+Find and read:
 
-If the repo is huge or ambiguous, the subagent should return **best-effort paths** and mark **uncertain** areas; you may ask the user **one** disambiguation question instead of spawning more explorers.
+- current frontend package and UI stack (`package.json`, imports, component library, CSS framework)
+- every relevant `DESIGN.md` or `design.md`
+- the current screen, route, component, or nearby app shell that will be changed
+- the specific parts that need to change, be added, modified, or removed
 
-The subagent may **recommend** which `DESIGN.md` is most relevant to the feature; you still read **every** listed design-spec file in Step 2 unless the user explicitly narrows scope.
+Prefer an `explore` subagent for repo discovery when available. Keep it bounded: one pass, then the parent reads the returned files. If multiple frontends are plausible, ask which one to design for.
 
-## Step 2 — Read synthesis (parent agent)
+## Respect Existing UI
 
-You (the parent agent), not the subagent:
+The mockup must look like the current product, not a generic landing page.
 
-### 2a — `package.json` and UI library
+Use the existing UI library and visual conventions:
 
-Read the **primary frontend `package.json`** from Step 1. If none was found (backend-only, non-JS): skip library detection, use plain HTML + CSS with a clean modern style, and note this to the user. If multiple frontends were flagged ambiguous: ask the user which `package.json` to use before continuing.
+- component library, spacing, colors, typography, borders, shadows, density
+- app shell, navigation, headers, modals, forms, tables, empty states
+- current content patterns and realistic domain data
 
-Look for these libraries in `dependencies` or `devDependencies`:
+Only design the changed area. For surrounding UI:
 
-| Library | CDN to use in mockup |
-|---------|----------------------|
-| `antd` | `https://unpkg.com/antd/dist/antd.min.js` + `https://unpkg.com/antd/dist/antd.min.css` |
-| `@mui/material` | `https://unpkg.com/@mui/material@latest/umd/material-ui.production.min.js` |
-| `@chakra-ui/react` | Use inline Tailwind-like styles instead (Chakra has no simple CDN) |
-| `tailwindcss` | `https://cdn.tailwindcss.com` |
-| `@mantine/core` | `https://unpkg.com/@mantine/core/esm/index.js` (or inline styles) |
-| `react-bootstrap` | Bootstrap CDN: `https://cdn.jsdelivr.net/npm/bootstrap/dist/css/bootstrap.min.css` |
+- render it lightly if context is needed
+- gray it out, reduce opacity, or simplify it
+- omit it when it does not help the design decision
 
-If no recognized library is found, use plain HTML + CSS with a clean modern style.
+Do not redesign unrelated parts of the screen.
 
-### 2b — All `DESIGN.md` files
+## Generate Mockup
 
-Read **every** design-spec path returned in Step 1. Extract color tokens, typography, spacing, and component rules; **apply all** in the mockup.
+Create one self-contained HTML file:
 
-**Conflict rule:** if the same token or rule is defined differently in multiple files, prefer the file whose directory is **closest to the primary frontend package root** (longest shared path prefix / nearest ancestor). If still tied, prefer the **shallower** path (fewer segments from repo root). If still tied, **alphabetical** full path. Print **one user-visible line** per conflict: which keys conflicted and which file won.
+- include all CSS and JS inline or via CDN
+- no build step
+- realistic data, not lorem ipsum
+- enough interaction/state to judge the design
+- visual annotations only when they help the user understand what changed
 
-### 2c — Representative pages for layout
+Save to the next version path derived above.
 
-Read the **1–2 representative UI files** from Step 1. From them, infer:
+## Open When Done
 
-- Sidebar width and colors
-- Topbar/header structure
-- Page padding and container width
-- Typography scale
-
-If Step 1 found no suitable files (component library, brand-new repo), skip this subsection and use a generic clean layout in Step 4.
-
-## Step 3 — Determine slug and version
-
-- Convert the feature name to kebab-case slug (e.g. "payment history" → `payment-history`, "User Settings" → `user-settings`)
-- Run: `ls "$BASE_DIR/<slug>/" 2>/dev/null` to list existing files
-- Find the highest existing version number (v1, v2, v3...)
-- Next version = highest + 1, or v1 if none exist
-
-## Step 4 — Generate HTML mockup
-
-Write a fully self-contained HTML file with:
-
-- `<!DOCTYPE html>` with all CSS/JS loaded via CDN (no external file references)
-- Layout matching the existing app shell: sidebar on left, topbar at top, content area
-- The new screen's UI in the content area
-- Realistic placeholder data — actual names, numbers, dates (NOT "Lorem ipsum", NOT "Sample text", NOT "John Doe")
-- Interactive states where possible (hover, selected row, etc.) using the library's components
-- Responsive behavior where the feature warrants it
-
-The mockup must be visually close to what the final implementation will look like. Do not use placeholder boxes or generic layouts — make it look like a real screen.
-
-## Step 5 — Save and open
+After saving each version, open it with the platform's default opener. Opening is best-effort — if it fails (headless, CI, missing binary), print the absolute path and continue.
 
 ```bash
-mkdir -p "$BASE_DIR/<slug>"
-# write the file to $BASE_DIR/<slug>/vN.html
+FILE="<absolute file path>"
+case "$(uname -s)" in
+  Darwin)               open "$FILE" ;;
+  Linux)                xdg-open "$FILE" >/dev/null 2>&1 || gio open "$FILE" >/dev/null 2>&1 || printf 'Open manually: %s\n' "$FILE" ;;
+  MINGW*|MSYS*|CYGWIN*) start "" "$FILE" ;;
+  *)                    printf 'Open manually: %s\n' "$FILE" ;;
+esac
 ```
 
-After the file exists on disk:
+## Approval Loop
 
-1. **Resolve the mockup directory and filename** (e.g. `DIR="$BASE_DIR/<slug>"`, `FILE="vN.html"`). Do not build or use a `file://` URL for Cursor's embedded browser; the browser MCP only supports `http://` and `https://`.
-2. **Serve the mockup directory over localhost** using `npx live-server`:
+### `--yolo` mode
 
-```bash
-npx -y live-server "$BASE_DIR/<slug>" --host=127.0.0.1 --port=<free-port> --no-browser
+Generate v1, open it, and stop. **Do not ask for approval.** The user will review the mockup on their own time.
+
+Emit one line on stdout (the last line):
+
+```text
+DESIGN_GENERATED slug=<slug> html=<absolute-html-path>
 ```
 
-- Before starting, check whether a live-server process is already serving the same `$BASE_DIR/<slug>` directory; reuse it if possible instead of starting a duplicate.
-- Use a high, likely-free port such as `43117`; if it is occupied, choose another. Remember the chosen port — Step 6.5 reuses it for the screenshot capture.
-- Start this as a background command and wait until the terminal output shows it is serving.
+Callers must treat `DESIGN_GENERATED` as "mockup exists, not approved yet". They continue without blocking, but should flag the design as pending user review.
 
-3. **Open in Cursor’s embedded browser:** if the **`cursor-ide-browser`** MCP is available, inspect `browser_navigate`’s descriptor, then invoke it with `url`: `http://127.0.0.1:<port>/vN.html`, **`position`: `"side"`** (preview beside the editor), **`newTab`: `true`** (avoid clobbering an unrelated tab), and optionally `take_screenshot_afterwards`: `true` for visual confirmation.
+### Normal mode
 
-**Fallback** when `npx live-server` or the MCP browser is unavailable: open with the OS default app using the resolved absolute path: macOS `open "$ABS_PATH"`, Linux `xdg-open "$ABS_PATH"` (Wayland/Linux without xdg-open: try `gio open`), Windows CMD `cmd /c start "" "$ABS_PATH"` — and tell the user the browser MCP could not open the localhost preview.
+After opening the mockup, ask:
 
-Tell the user:
-> Mockup saved to `$BASE_DIR/<slug>/vN.html` — opening in Cursor’s browser now.
+Question: `Approve?`
 
-## Step 6 — Ask for approval
-
-Use AskUserQuestion with exactly these options:
-
-```
-Question: "How does the mockup look?"
 Options:
-  - "Looks good - approve mockup"
-  - "Need changes"
-  - "Start over"
-```
 
-**If "Looks good - approve mockup"** -> proceed to Step 6.5.
+- `Approved`
+- `Need changes`
+- `Start over`
+- `Skip design`
 
-**If "Need changes"** → ask the user what to change (one follow-up question or free text), then return to Step 4 with the changes applied. Increment the version number (e.g. v1 → v2). Repeat from Step 4.
+Behaviour per option:
 
-**If "Start over"** → ask the user to describe what they want differently, then return to Step 1.
+- `Approved` → emit `DESIGN_APPROVED` (see below) and stop.
+- `Need changes` → ask what to change, create v(N+1), open it, ask `Approve?` again.
+- `Start over` → ask what direction to use, create v(N+1) from that direction, open it, ask `Approve?` again.
+- `Skip design` → emit `DESIGN_SKIPPED` and stop. The caller continues without a mockup.
 
-## Step 6.5 — Final output contract
+Loop cap: at most 5 iterations. If the user picks `Need changes` or `Start over` a 6th time, stop the loop and emit `DESIGN_ABORTED reason=iteration-limit`.
 
-Print exactly one line on stdout (last line of skill output) that callers parse:
+## Approved output
 
-```
+Print exactly one line on stdout (the last line):
+
+```text
 DESIGN_APPROVED slug=<slug> html=<absolute-html-path>
 ```
 
-Examples:
+## Skipped / aborted output
 
-```
-DESIGN_APPROVED slug=dashboard html=/Users/me/repo/.design/dashboard/v2.html
-DESIGN_APPROVED slug=order-detail html=/Users/me/repo/.design/order-detail/v1.html
+For `Skip design`:
+
+```text
+DESIGN_SKIPPED slug=<slug>
 ```
 
-Use absolute paths in both fields. The `slug` field must exactly match the slug computed in Step 3.
+For loop exhaustion:
+
+```text
+DESIGN_ABORTED slug=<slug> reason=iteration-limit
+```
+
+Callers (e.g. `interview-me`) must treat `DESIGN_SKIPPED` and `DESIGN_ABORTED` as opt-out signals and continue without a mockup.
