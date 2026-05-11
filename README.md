@@ -13,15 +13,15 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 ## Skills
 
 
-| Skill                           | Purpose                                                                                                                                                                |
-| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `audit`                         | Stress-test a plan, PRD, or mockup for missing edge cases and ambiguous rules.                                                                                         |
-| `design`                        | Generate an HTML mockup for a screen before implementing it.                                                                                                           |
-| `fix`                           | Single-shot bug fixer on the current branch with strict TDD and per-attempt checklists.                                                                                |
-| `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability.                                                                                  |
-| `interview-me`                  | Business-analyst interview to pressure-test a non-technical client's plan.                                                                                             |
-| `tdd`                           | Red-green-refactor TDD loop for features and bugfixes.                                                                                                                 |
-| `verify`                        | Verify a running app's behaviour against a checklist. Spawns a fresh-context subagent (no code knowledge) and reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item. |
+| Skill                           | Purpose                                                                                                                                        |
+| ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
+| `audit`                         | Stress-test a plan, PRD, or mockup for missing edge cases and ambiguous rules.                                                                 |
+| `design`                        | Generate an HTML mockup for a screen before implementing it.                                                                                   |
+| `fix`                           | Bug fixer that writes an observable `.checklist/fix-<slug>/FIX.md` checklist first, waits for approval, then fixes and verifies.               |
+| `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability.                                                          |
+| `interview-me`                  | Business-analyst interview to pressure-test a non-technical client's plan.                                                                     |
+| `tdd`                           | Red-green-refactor TDD loop for features and bugfixes.                                                                                         |
+| `verify`                        | Verify arbitrary checklist files against a running app with cURL for backend/API items and `playwright-cli` screenshots for frontend/UI items. |
 
 
 ## Prerequisites
@@ -65,7 +65,7 @@ playwright-cli install --skills         # bundled agent skills (one-time)
 npx playwright install chromium         # browser binary
 ```
 
-`/verify` re-checks `UNVERIFIABLE` items by driving a headless Chromium through `playwright-cli`. Skipped automatically if the CLI is missing — see warning text in `verify/SKILL.md` 5b-1. Pass `--no-browser` to opt out.
+`/verify` uses `playwright-cli` for frontend/UI checklist items and captures one final screenshot per UI item. Skipped automatically if the CLI is missing. Pass `--no-browser` to opt out.
 
 ### GitHub MCP server
 
@@ -117,30 +117,31 @@ Some planning skills write a checklist file. `/verify` reads it.
 /fix  (handles its own /verify loop internally)
 ```
 
-`/fix` writes `.checklist/fix-<slug>-#<try>.md` per attempt and runs `/verify --checklist` against it in the foreground. One re-fix allowed; optional GitHub issue + commit linkage at the end.
+`/fix` writes `.checklist/fix-<slug>/FIX.md`, shows it for approval, then fixes only the approved behaviour and runs `/verify --checklist` against that file.
 
-### 4. Verify + auto-fix on a checklist
+### 4. Verify any checklist
 
 ```
-/verify --checklist <path> --fix
+/verify --checklist <path>
 ```
 
-For each FAIL or TIMEOUT item, spawns a sequential TDD fix agent (RED → GREEN → PR). Three outcomes per item: `FIX_COMPLETE` (PR opened), `FIX_FAILED` (needs manual), `FIX_NOT_NEEDED` (checklist item was wrong).
+`/verify` accepts arbitrary markdown checklist files. Backend/API items are checked with cURL; frontend/UI items are checked with `playwright-cli` and include screenshot evidence.
 
 ### `/verify` reference
 
 ```bash
-/verify                              # auto-picks latest .checklist/ file
-/verify --prd 42                     # uses .checklist/prd-42.md
+/verify                              # auto-picks a single .checklist/**/*.md file
 /verify --checklist path/to/file.md  # explicit file
-/verify --fix                        # verify + TDD fix each FAIL/TIMEOUT
 /verify --base-url http://localhost:8080 --timeout 60
 /verify --start-cmd "npm run dev"    # override auto-detected start command
+/verify --no-browser                 # skip frontend/UI browser validation
 ```
 
 App lifecycle: `/verify` auto-detects the start command (package.json → Procfile → Cargo → Python → Makefile), starts the app, verifies, then shuts it down. If already running, skips start/stop.
 
-Verification subagent has **zero code access** — only curl + the checklist. Prevents the implementer from rubber-stamping their own work.
+Backend/API items are verified with cURL. If authentication is required, `/verify` performs a bounded auth-discovery pass through docs, tests, and obvious route definitions; if credentials or setup still cannot be found, it asks the user instead of guessing.
+
+Frontend/UI items are verified with `playwright-cli`. Screenshots are written beside the checklist in `<checklist-stem>-screenshots/` with names derived from each checklist item, such as `03-login-email-required.png`.
 
 ### Optional checkpoints
 
@@ -153,10 +154,10 @@ Verification subagent has **zero code access** — only curl + the checklist. Pr
 Checklist-producing skills write files to `<project-root>/.checklist/`:
 
 
-| Source          | File                                                                            |
-| --------------- | ------------------------------------------------------------------------------- |
-| `/interview-me` | `.checklist/interview-<slug>/INTERVIEW.md`                                      |
-| `/fix`          | `.checklist/fix-<slug>-#<try>.md` (one per attempt — `#1` initial, `#2` re-fix) |
+| Source          | File                                       |
+| --------------- | ------------------------------------------ |
+| `/interview-me` | `.checklist/interview-<slug>/INTERVIEW.md` |
+| `/fix`          | `.checklist/fix-<slug>/FIX.md`             |
 
 
 These files are git-ignored. Add `.checklist/` to your global gitignore (or the repo's `.gitignore`).
@@ -172,7 +173,7 @@ Claude-related plugins and references I rely on. Append new finds here.
 
 ### Tools
 
-- [microsoft/playwright-cli](https://github.com/microsoft/playwright-cli) — global CLI bundling Chromium/Firefox/WebKit. Used by `/verify`'s browser pass to drive headless browsers when curl can't verify a checklist item. Now distributed as `@playwright/cli`.
+- [microsoft/playwright-cli](https://github.com/microsoft/playwright-cli) — global CLI bundling Chromium/Firefox/WebKit. Used by `/verify` to validate frontend/UI checklist items and capture final per-item screenshots. Now distributed as `@playwright/cli`.
 - [microsoft/markitdown](https://github.com/microsoft/markitdown) — Python utility that converts PDFs, Word, Excel, images, and audio into LLM-friendly Markdown. Handy preprocessor for feeding mixed documents into a Claude session or knowledge base.
 - [HKUDS/DeepTutor](https://github.com/HKUDS/DeepTutor) — agent-native personalized learning assistant: multi-modal chat, document analysis, persistent memory, autonomous tutoring agents.
 
