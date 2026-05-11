@@ -1,8 +1,9 @@
 ---
-name: fix
+
+## name: fix
+
 description: Fix bugs from a user-provided bug description with actual behaviour and expected behaviour. Use when the user invokes /fix or asks to fix a bug by describing what happens now and what should happen instead. Creates an observable acceptance checklist first, waits for user approval, then fixes and verifies with /verify.
-argument-hint: "<bug description with actual behaviour and expected behaviour>"
----
+argument-hint: ""
 
 # /fix - Checklist-Gated Bug Fix
 
@@ -137,3 +138,4 @@ The task is complete only when:
 - Application code changes are scoped to that checklist
 - Relevant tests pass
 - `/verify --checklist .checklist/fix-<slug>/FIX.md` passes every item, or any non-pass result is explicitly accepted by the user
+
