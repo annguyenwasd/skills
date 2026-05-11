@@ -243,6 +243,21 @@ Observed: <observed behaviour or missing setup>
 Next step: <fix app / improve checklist / ask user for auth details>
 ```
 
+When any item is `FAIL` or `TIMEOUT`, also print a `/fix` handoff block for each affected item. Do not run `/fix` automatically.
+
+```markdown
+## Fix Handoff
+
+### #N - <item text>
+
+Run:
+`/fix <short bug title>`
+
+Actual behaviour: <observed behaviour/evidence from verification>
+Expected behaviour: <expected behaviour from checklist item>
+Checklist: <checklist-path>
+```
+
 ## Rules
 
 - Verify arbitrary checklist files; do not require `/interview-me`, `/fix`, `INTERVIEW.md`, or `FIX.md` provenance.
@@ -252,5 +267,6 @@ Next step: <fix app / improve checklist / ask user for auth details>
 - Use `playwright-cli` for frontend/UI validation.
 - Capture one final screenshot for each frontend/UI item that reaches a browser page.
 - Screenshot filenames must follow the checklist item text, not generic `item-<#>.png`.
+- When `FAIL` or `TIMEOUT` appears, suggest `/fix` with actual behaviour, expected behaviour, and checklist path. Never auto-fix from `/verify`.
 - Never mark vague items `PASS`; use `ASSUMED` and state the inference.
 - Always stop the app and close browser sessions that `/verify` started.

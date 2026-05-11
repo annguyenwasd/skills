@@ -1,10 +1,10 @@
 ---
 name: design
-description: Generate an HTML mockup for a screen/page before implementing it. Invoked explicitly as /design [--path <dir>] <feature-name>. Spawns one readonly Explore subagent to discover the frontend package, all DESIGN.md files repo-wide, and representative pages; parent reads those artifacts before generating HTML. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to <base-dir>/<slug>/ (default .design in the current working directory; interview-me callers write beside INTERVIEW.md; override with --path), serves them with live-server, opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser), captures a screenshot via playwright-cli, and asks for approval via AskUserQuestion before proceeding to code.
+description: Generate an HTML mockup for a screen/page and ask for approval. Invoked explicitly as /design [--path <dir>] <feature-name>. Spawns one readonly Explore subagent to discover the frontend package, all DESIGN.md files repo-wide, and representative pages; parent reads those artifacts before generating HTML. Does NOT auto-trigger on "implement screen" — only fires when user types /design. Saves versioned mockups to <base-dir>/<slug>/ (default .design in the current working directory; interview-me callers use --path to write beside INTERVIEW.md; override with --path), serves them with live-server, opens them in Cursor's browser via the IDE browser MCP (cursor-ide-browser), captures a screenshot via playwright-cli, and asks for approval via AskUserQuestion.
 argument-hint: "[--path <dir>] <feature-name or description>"
 ---
 
-Generate an HTML mockup for the requested screen, get user approval, then implement. Follow these steps exactly.
+Generate an HTML mockup for the requested screen, get user approval. Follow these steps exactly.
 
 ## Step 0 — Parse arguments
 
@@ -19,7 +19,7 @@ Resolve the base directory:
 # Default for direct /design calls
 BASE_DIR="$PWD/.design"
 
-# If interview-me passed an interview checklist path, write beside INTERVIEW.md
+# If an upstream caller passed an interview checklist path, write beside INTERVIEW.md
 if [ -n "$INTERVIEW_CHECKLIST_PATH" ]; then
   BASE_DIR="$(cd "$(dirname "$INTERVIEW_CHECKLIST_PATH")" && pwd)"
 fi
@@ -36,7 +36,7 @@ fi
 mkdir -p "$BASE_DIR"
 ```
 
-Throughout the rest of this skill, every reference to a mockup directory means `$BASE_DIR/<slug>/`. Direct `/design` invocations without `--path` write to `<current-working-directory>/.design/<slug>/`; `interview-me` callers write to the same directory as `INTERVIEW.md`; `--path` overrides both.
+Throughout the rest of this skill, every reference to a mockup directory means `$BASE_DIR/<slug>/`. Direct `/design` invocations without `--path` write to `<current-working-directory>/.design/<slug>/`; `interview-me` callers should pass `--path .checklist/interview-<slug>` so mockups write beside `INTERVIEW.md`; `--path` overrides both.
 
 ## Step 1 — Explore codebase (Explore subagent)
 
@@ -152,12 +152,12 @@ Use AskUserQuestion with exactly these options:
 ```
 Question: "How does the mockup look?"
 Options:
-  - "Looks good — proceed to code"
+  - "Looks good - approve mockup"
   - "Need changes"
   - "Start over"
 ```
 
-**If "Looks good"** → proceed to Step 6.5 (screenshot capture), then Step 7.
+**If "Looks good - approve mockup"** -> proceed to Step 6.5.
 
 **If "Need changes"** → ask the user what to change (one follow-up question or free text), then return to Step 4 with the changes applied. Increment the version number (e.g. v1 → v2). Repeat from Step 4.
 

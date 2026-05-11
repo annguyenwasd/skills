@@ -16,7 +16,7 @@ Each top-level folder is one skill. `SKILL.md` inside holds the skill frontmatte
 | Skill                           | Purpose                                                                                                                                        |
 | ------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------- |
 | `audit`                         | Stress-test a plan, PRD, or mockup for missing edge cases and ambiguous rules.                                                                 |
-| `design`                        | Generate an HTML mockup for a screen before implementing it.                                                                                   |
+| `design`                        | Generate an HTML mockup for a screen and get approval.                                                                                         |
 | `fix`                           | Bug fixer that writes an observable `.checklist/fix-<slug>/FIX.md` checklist first, waits for approval, then fixes and verifies.               |
 | `improve-codebase-architecture` | Find architectural improvements that deepen shallow modules and increase testability.                                                          |
 | `interview-me`                  | Business-analyst interview to pressure-test a non-technical client's plan.                                                                     |
@@ -93,25 +93,27 @@ After linking, each skill is invocable in Claude Code as `/<skill-name>` (e.g. `
 
 ## Workflows
 
-Some planning skills write a checklist file. `/verify` reads it.
+Start implementation chains with `/interview-me`. It resolves product decisions into an acceptance checklist, then `/verify` checks that checklist against the running app.
 
-### 1. Non-technical pitch → checklist → verify
+### 1. Interview -> checklist -> verify
 
 ```
-/interview-me  →  /verify --checklist .checklist/interview-<slug>/INTERVIEW.md
+/interview-me
+/verify --checklist .checklist/interview-<slug>/INTERVIEW.md
 ```
 
 `/interview-me` runs a four-pass business-analyst interview and writes `.checklist/interview-<slug>/INTERVIEW.md`. `/verify` runs that checklist against the running app and reports PASS/FAIL/TIMEOUT/ASSUMED/UNVERIFIABLE per item.
 
-### 2. Audit an existing spec
+### 2. Verify failure -> fix -> verify again
 
 ```
-/audit
+/fix <bug from /verify Fix Handoff>
+/verify --checklist .checklist/interview-<slug>/INTERVIEW.md
 ```
 
-`/audit` stress-tests a plan or mockup and reports missing edge cases, ambiguous rules, contradictions, and unspecified UI states. It does not write a checklist; use `/interview-me` to resolve findings into a verifiable checklist.
+When `/verify` reports `FAIL` or `TIMEOUT`, use its Fix Handoff block as the `/fix` input. `/fix` writes `.checklist/fix-<slug>/FIX.md`, shows it for approval, then fixes only the approved behaviour and runs `/verify --checklist` against that file. Re-run the original interview checklist after the fix if the broader flow matters.
 
-### 3. Single bug fix → verify
+### 3. Direct bug fix -> verify
 
 ```
 /fix  (handles its own /verify loop internally)
@@ -146,7 +148,7 @@ Frontend/UI items are verified with `playwright-cli`. Screenshots are written be
 ### Optional checkpoints
 
 - `/audit` — stress-test a plan or mockup for missing edge cases before implementation.
-- `/design` — generate an HTML mockup for a screen before implementing it.
+- `/design` — generate an HTML mockup for a screen and get approval.
 - `/improve-codebase-architecture` — run before large feature work to surface refactors that make the next slices testable.
 
 ### `.checklist/` convention

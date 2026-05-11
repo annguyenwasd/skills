@@ -22,7 +22,7 @@ After this pass, per-question exploration is on-demand: cap at ~5 tool calls —
 
 **Gap discovery → delegate.** Before asking "what if" or business-rule questions, run or reuse the `audit` skill on the same input. For a topic with no spec, use audit's speculative mode. Treat the audit report as the backlog of gaps to resolve; preserve audit's severity ordering, but rewrite every item in plain business language before asking the client.
 
-**Design changes → delegate.** If the conversation surfaces UI/screen/visual-design decisions (new screen, layout change, component design), pause the interview and hand off to the `design` skill: invoke `/design <feature>`. Resume the interview only after `/design` returns `DESIGN_APPROVED` (or the user opts out). When you hand off, pass the codebase context you already gathered so `/design` can skip its own explore step.
+**Design changes -> delegate.** If the conversation surfaces UI/screen/visual-design decisions (new screen, layout change, component design), pause the interview and hand off to the `design` skill. Derive the same `<slug>` you will use for the interview checklist, create the intended checklist directory `.checklist/interview-<slug>/`, and invoke `/design --path .checklist/interview-<slug> <feature>` so mockups land beside the later `INTERVIEW.md`. Resume the interview only after `/design` returns `DESIGN_APPROVED` (or the user opts out). When you hand off, pass the codebase context you already gathered so `/design` can skip its own explore step.
 
 ## Argument parsing
 
@@ -135,7 +135,7 @@ After producing the Resolved Plan (normal mode) or the full structured summary (
 **What to include:** for each decision or rule in the Resolved Plan that describes observable app behaviour, write one checklist item in acceptance-test form:
 `Given [initial state/context], when [event/action], then [expected observable behaviour]`
 
-Make each item specific enough for `/verify` to check without code access: include the page/path for UI flows, the exact control or user action, and the exact visible text, API status, field, redirect, or state change expected.
+Make each item specific enough for `/verify` to check from outside the app: include the page/path for UI flows, the exact control or user action, and the exact visible text, API status, field, redirect, or state change expected. `/verify` may read codebase docs or tests only to discover auth/setup details, but the checklist item itself must describe externally observable behaviour.
 
 Include behaviour a user, browser test, or HTTP API can observe. This includes API responses, UI flows, component states, form validation, API errors shown in the UI, and persisted outcomes visible through later app/API reads.
 
