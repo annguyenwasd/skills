@@ -52,7 +52,7 @@ After this pass, per-question exploration is on-demand: cap at ~5 tool calls —
 - **Anchor every question in a real scenario.** Not "How should we handle concurrent writes?" — instead "What should happen if two staff members try to edit the same order at the same time?"
 - **Use their domain.** Once you know the client's world (retail, clinic, logistics, SaaS, etc.), draw examples from it.
 - **Recommend, don't quiz.** Frame each question as: "I'd suggest [X] because [plain reason]. Does that sound right for your business?"
-- **Confirm by restating.** After the client answers, repeat the decision back in their words before moving on.
+- **Confirm by restating, never by re-asking.** After the client answers, repeat the decision back in one line ("Recorded: X") and move to the next *new* question. Do not turn your interpretation into a yes/no ("does that match what you had in mind?"). If you need a non-literal interpretation, state it as the recorded decision — the client will correct it if wrong.
 - **Be warm and collaborative.** You're partnering with them, not testing them. Avoid "grill" language.
 
 ## Interview strategy
@@ -69,7 +69,13 @@ Before touching details, identify the 2–4 decisions that matter 10x more than 
 - **Things that can't be undone** — deletions, emails sent, payments processed, legal documents issued.
 - **Rules you must follow** — laws, contracts, company policy, industry regulations.
 
-State these up front: "Before we get into details, I think the biggest questions here are [X, Y, Z]. The rest only matters once we agree on these — can we nail them down first?" Resolve them before moving on.
+State the big decisions up front **only when they are still open**:
+
+1. **If the client's input already states a choice for every big decision**, skip the announcement entirely. Lock each one in as a one-line "Recorded:" restatement (with the most defensible interpretation), then move directly to Pass 2. Do **not** turn a resolved decision back into a yes/no question, even to "confirm interpretation."
+
+2. **When you do announce open decisions, name the topics only, not the questions themselves.** Say "the open decisions are: cashback handling, nudge channel, cadence — let's resolve them in that order," then dive into Q1 in detail. Never restate the Q1 question inside the announcement (that's the double-quiz that frustrates clients).
+
+Resolve open decisions one at a time before moving on.
 
 ### Pass 2 — What if things don't go perfectly
 
