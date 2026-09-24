@@ -13,7 +13,11 @@ It runs from inside the worktree. git refuses to check out one branch in two wor
 merge happens in whichever checkout already holds the default branch - worktrees share refs, so it
 is the same merge.
 
-Results: `PASS`, `SKIP`, `BLOCKER`.
+Results: `PASS`, `SKIP`, `BLOCKER`, `NOTE`.
+
+Run `--dry-run` first. The sweep is the destructive half, and it is safe by design: it removes a
+worktree only when its working tree is clean *and* its branch has already landed *and* no process
+is sitting in it.
 
 ## Run This
 
@@ -59,6 +63,12 @@ decision. If the default branch is now ahead of `origin/<default>`, say so - pus
   `git branch -d` alone is not enough: it is satisfied by the branch's *upstream*, so it would
   happily delete a pushed-but-unmerged branch with unique commits on it.
 - **Never a locked worktree.** Unlock it yourself, deliberately, if it really is finished.
+- **Never a worktree a running process is inside.** git's `locked` only covers worktrees Claude
+  Code created; one added with a plain `git worktree add` carries no lock, and removing it deletes
+  the working directory under any session running in it — invisible until that session's next
+  command fails with `getcwd: cannot access parent directories`. The sweep refuses those, naming
+  the pids. For the worktree you asked to finish, it reports them as a `NOTE` instead, since that
+  one is yours to close.
 - **Never the primary checkout**, and never this worktree before the merge is verified to have
   landed.
 

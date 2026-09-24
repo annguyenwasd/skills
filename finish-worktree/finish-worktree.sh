@@ -92,6 +92,24 @@ wt_status() { git -C "$1" status --porcelain 2>/dev/null || true; }
 wt_is_locked() { wt_annotations | awk -F'\t' -v w="$1" '$1 == w && $3 == "yes" { f = 1 } END { exit !f }'; }
 wt_is_ancestor() { git -C "$PRIMARY" merge-base --is-ancestor "refs/heads/$1" "refs/heads/$INTO"; }
 
+# Every process's working directory, in one call: <pid>\t<cwd>.
+#
+# git's own `locked` covers only the worktrees Claude Code creates; a worktree added with a plain
+# `git worktree add` carries no lock, and removing one deletes the working directory under any
+# session running inside it. That is invisible until that session's next command fails with
+# "getcwd: cannot access parent directories". Live cwd is the only signal that catches it.
+if command -v lsof >/dev/null 2>&1; then
+  CWD_INDEX="$(lsof -a -d cwd -Fpn 2>/dev/null | awk '/^p/{p=substr($0,2); next} /^n/{print p "\t" substr($0,2)}')"
+else
+  CWD_INDEX=""
+  echo "NOTE: lsof is unavailable, so a worktree in use by a running process cannot be detected."
+fi
+
+# pids whose working directory is this directory or below it
+wt_in_use() {
+  printf '%s\n' "$CWD_INDEX" | awk -F'\t' -v w="$1" '$2 == w || index($2, w "/") == 1 { print $1 }'
+}
+
 # The checkout that holds the default branch. Merges happen there, and so does `branch -d`,
 # which decides "fully merged" against the HEAD of the repository it runs in.
 MERGE_TARGET="$(wt_annotations | awk -F'\t' -v want="$INTO" '$2 == want { print $1; exit }')"
@@ -115,6 +133,9 @@ if [ "$FINISHING" = 1 ]; then
     blocker "$WORKTREE is locked, and locked worktrees are never touched. Unlock it with
     'git -C $PRIMARY worktree unlock $WORKTREE' once you are sure it is finished."
   fi
+
+  in_use="$(wt_in_use "$WORKTREE" | tr '\n' ' ' | sed 's/ *$//')"
+  [ -z "$in_use" ] || echo "NOTE: process(es) $in_use have their working directory inside this worktree. They will need to cd out; it is the one you asked to finish."
 
   status_out="$(wt_status "$WORKTREE")"
   if [ -n "$status_out" ]; then
@@ -188,6 +209,11 @@ if [ "$PRUNE" = 1 ]; then
     [ "$path" = "$WORKTREE" ] && { total_skipped=$((total_skipped + 1)); continue; }
     if [ "$locked" = "yes" ]; then
       echo "SKIP: $rel -- locked"; total_skipped=$((total_skipped + 1)); continue
+    fi
+    in_use="$(wt_in_use "$path" | tr '\n' ' ' | sed 's/ *$//')"
+    if [ -n "$in_use" ]; then
+      echo "SKIP: $rel -- in use by process(es) $in_use"
+      total_skipped=$((total_skipped + 1)); continue
     fi
     if [ -n "$prunable" ] || [ ! -d "$path" ]; then
       echo "SKIP: $rel -- the directory is gone; run 'git -C $PRIMARY worktree prune --expire now'"
