@@ -1,1 +1,4 @@
 .checklist/
+
+# eval workspaces from skill-creator runs
+create-issue-workspace/
