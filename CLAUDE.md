@@ -1,13 +1,11 @@
 # CLAUDE.md
 
-You better watch out. Codex will review your code.
+## Receive instructions
+When receive instructions from me, always analise and create to do list (claude's feature) and update the status of the list as you go
 
-Behavioral guidelines to reduce common LLM coding mistakes. Merge with project-specific instructions as needed.
+## iTerm tab title
 
-**Tradeoff:** These guidelines bias toward caution over speed. For trivial tasks, use judgment.
-
-These rules apply to every task in this project unless explicitly overridden.
-Bias: caution over speed on non-trivial work. Use judgment on trivial tasks.
+The tab title is one plain-text line: a meaningful goal summary of at most 10 words, followed by `(branch)`. Before starting a new goal, use TaskCreate with a concise subject describing the concrete action and target (for example, "Fix grouped item labels in iOS tests"). The TaskCreated hook uses that subject as the title; it is the semantic summary, so avoid vague subjects such as "Continue working". UserPromptSubmit provides a provisional title before work starts. Stop and StopFailure reapply the saved goal with the current Git branch; they do not summarize the final response or replace the goal with an API error. Background notifications and subagents do not rename the main tab. Do not run a Bash title command manually.
 
 ## Rule 1 — Think Before Coding
 
@@ -42,7 +40,7 @@ If code can answer, code answers.
 
 ## Rule 6 — Token budgets are not advisory
 
-Per-task: 4,000 tokens. Per-session: 30,000 tokens.
+Per-task: 100,000 tokens. Per-session: 1,000,000 tokens.
 If approaching budget, summarize and start fresh.
 Surface the breach. Do not silently overrun.
 
